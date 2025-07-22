@@ -27,28 +27,36 @@ struct Player {
     cards: Vec<Card>,
 }
 
-enum AskResult {
-    Invalid,
-    No,
-    Yes,
+enum AskOutcome {
+    Success,
+    Failure,
 }
 
-enum DeclaractionResult {
-    No,
-    Yes,
+enum AskError {
+    NotYourTurn,
+    SameTeam,
+    PlayerNotFound,
+    InvalidBook,
+    AlreadyOwnCard,
+}
+
+struct NextOutcome {
+    asker: usize,
+    askee: usize,
+    card: Card,
+    outcome: AskOutcome,
+}
+
+enum NextError {
+    YourTurn,
+}
+
+enum DeclarationOutcome {
+    Success,
+    Failure,
 }
 
 impl Fish {
-    fn start(&self) {
-        println!("Welcome to Fish!");
-        println!("You are Player {}", self.your_index.borrow());
-        println!(
-            "Your cards: {:?}",
-            self.players.borrow()[*self.your_index.borrow()].cards
-        );
-        println!("It is Player {}'s turn", self.curr_player.borrow());
-    }
-
     fn init() -> Self {
         let num_teams = 2;
         let num_players = 6;
@@ -92,36 +100,29 @@ impl Fish {
         *self.curr_player.borrow_mut() = new_game.curr_player.take();
         *self.your_index.borrow_mut() = new_game.your_index.take();
         *self.num_players.borrow_mut() = new_game.num_players.take();
-        new_game.start();
     }
 
-    fn handle_info(&self) {
-        println!("You are Player {}", *self.your_index.borrow());
-        println!(
-            "Your cards: {:?}",
-            self.players.borrow()[*self.your_index.borrow()].cards
-        );
-        for (i, player) in self.players.borrow().iter().enumerate() {
-            println!("Player {}: {:?}", i, player.cards);
+    fn handle_ask(&self, askee_idx: usize, card: &Card) -> Result<AskOutcome, AskError> {
+        let your_index = *self.your_index.borrow();
+        let curr_player = *self.curr_player.borrow();
+
+        if curr_player != your_index {
+            return Err(AskError::NotYourTurn);
         }
-        println!("It is Player {}'s turn", self.curr_player.borrow());
+        self.ask(askee_idx, card)
     }
 
-    fn handle_ask(&self, askee_idx: usize, card: Card) -> AskResult {
+    fn ask(&self, askee_idx: usize, card: &Card) -> Result<AskOutcome, AskError> {
         let mut curr_player = self.curr_player.borrow_mut();
-        let mut players = self.players.borrow_mut();
-
-        // Error checking
-        if *curr_player != *self.your_index.borrow() {
-            println!("Error: It's not your turn!");
-            return AskResult::Invalid;
-        }
         if askee_idx >= *self.num_players.borrow() {
-            println!("Error: That player does not exist!");
-            return AskResult::Invalid;
+            return Err(AskError::PlayerNotFound);
+        }
+        if askee_idx % 2 == *curr_player % 2 {
+            return Err(AskError::SameTeam);
         }
 
         // Get the asker and askee
+        let mut players = self.players.borrow_mut();
         let (a, b) = players.split_at_mut(std::cmp::max(*curr_player, askee_idx));
         let (asker, askee) = if askee_idx < *curr_player {
             (&mut b[0], &mut a[askee_idx])
@@ -129,46 +130,58 @@ impl Fish {
             (&mut a[*curr_player], &mut b[0])
         };
 
-        // Error checking
         if !asker.cards.iter().any(|c| c.book() == card.book()) {
-            println!("Error: You do not have the suit!");
-            return AskResult::Invalid;
+            return Err(AskError::InvalidBook);
         }
-
-        if asker.cards.contains(&card) {
-            println!("Error: You have the card!");
-            return AskResult::Invalid;
+        if asker.cards.contains(card) {
+            return Err(AskError::AlreadyOwnCard);
         }
 
         // Check if askee has the requested card
         // If so, move it to the asker's card list
-        if let Some(index) = askee.cards.iter().position(|c| *c == card) {
+        if let Some(index) = askee.cards.iter().position(|c| *c == *card) {
             let item = askee.cards.remove(index);
             asker.cards.push(item);
-            println!("Player {askee_idx} has the {card}");
-            return AskResult::Yes;
+            return Ok(AskOutcome::Success);
         }
 
-        println!("Player {askee_idx} does not have the {card}");
-        println!("It is the turn of Player {askee_idx}");
         *curr_player = askee_idx;
-        AskResult::No
+        Ok(AskOutcome::Failure)
     }
 
-    fn handle_next(&self) {
-        let mut curr_player = self.curr_player.borrow_mut();
-        if *self.your_index.borrow() == *curr_player {
-            println!("It's your turn to ask!");
-            return;
+    fn handle_next(&self) -> Result<NextOutcome, NextError> {
+        let asker = *self.curr_player.borrow();
+        let your_index = *self.your_index.borrow();
+        let num_players = *self.num_players.borrow();
+
+        if your_index == asker {
+            return Err(NextError::YourTurn);
         }
 
-        *curr_player = (*curr_player + 1) % *self.num_players.borrow();
-        if *self.your_index.borrow() == *curr_player {
-            println!("It's your turn!")
+        // Randomly ask a user for a card
+        loop {
+            let rand_user = rand::rng().random_range(0..num_players);
+            let rand_card = Card {
+                num: rand::rng().random_range(0..54),
+            };
+
+            match self.ask(rand_user, &rand_card) {
+                Ok(outcome) => {
+                    return Ok(NextOutcome {
+                        asker,
+                        askee: rand_user,
+                        card: rand_card,
+                        outcome,
+                    });
+                }
+                Err(_) => {
+                    continue;
+                }
+            }
         }
     }
 
-    fn handle_declaration(&self, declarer_idx: usize, book: Book) -> DeclaractionResult {
+    fn handle_declaration(&self, declarer_idx: usize, book: Book) -> DeclarationOutcome {
         let mut players = self.players.borrow_mut();
         let mut good_declaration: bool = true;
 
@@ -197,14 +210,35 @@ impl Fish {
         let mut teams = self.teams.borrow_mut();
 
         if good_declaration {
-            println!("Successfully declared {book:?}");
             teams[declarer_idx % 2].books.push(book);
-            return DeclaractionResult::Yes;
+            return DeclarationOutcome::Success;
         }
 
-        println!("Did not successfully declare {book:?}");
         teams[(declarer_idx + 1) % 2].books.push(book);
-        DeclaractionResult::No
+        DeclarationOutcome::Failure
+    }
+
+    fn check_game_end(&self) -> bool {
+        for p in self.players.borrow().iter() {
+            if p.cards.is_empty() {
+                self.reset();
+                break;
+            }
+        }
+        false
+    }
+
+    // Helpers
+    fn your_index(&self) -> usize {
+        *self.your_index.borrow()
+    }
+
+    fn curr_player(&self) -> usize {
+        *self.curr_player.borrow()
+    }
+
+    fn num_players(&self) -> usize {
+        *self.num_players.borrow()
     }
 
     fn get_cards() -> Vec<Card> {
@@ -224,20 +258,19 @@ impl Fish {
         }
     }
 
-    fn check_game_end(&self) -> bool {
-        for p in self.players.borrow().iter() {
-            if p.cards.is_empty() {
-                self.reset();
-                break;
-            }
-        }
-        false
+    fn get_sorted_hand(&self, player: usize) -> Vec<Card> {
+        let mut cards = self.players.borrow()[player].cards.clone();
+        cards.sort();
+        cards
     }
 }
 
 fn main() {
     let game = Fish::init();
-    game.start();
+    println!("Welcome to Fish!");
+    println!("You are Player {}", game.your_index());
+    println!("Your cards: {:?}", game.get_sorted_hand(game.your_index()));
+    println!("It is Player {}'s turn", game.curr_player());
 
     // Create the repl
     let game_ref = &game;
@@ -245,25 +278,59 @@ fn main() {
         .add(
             "info",
             command! { "Info", () => || {
-                game_ref.handle_info();
-                Ok(CommandStatus::Done)
-            }},
+                let your_index = game_ref.your_index();
+                println!("You are Player {your_index}");
+                println!("Your cards: {:?}", game_ref.get_sorted_hand(your_index));
+                for i in 0..game_ref.num_players() {
+                    println!("Player {i}: {:?}", game_ref.get_sorted_hand(i));
+                }
+                println!("It is Player {}'s turn", game_ref.curr_player());
+                        Ok(CommandStatus::Done)
+                    }},
         )
         .add(
             "ask",
             command! {
-                "Ask a player", (askee: usize, card: Card) => move |askee, card| {
-                    game_ref.handle_ask(askee, card);
-                    game_ref.check_game_end();
-                    Ok(CommandStatus::Done)
-                }
-            },
+                    "Ask a player", (askee: usize, card: Card) => move |askee, card| {
+                        match game_ref.handle_ask(askee, &card) {
+                            Ok(AskOutcome::Success) => {
+                                println!("Player {askee} has the {}", &card);},
+                            Ok(AskOutcome::Failure) => {
+                                println!("Player {askee} does not have the {card}");
+                                println!("It is the turn of Player {askee}");
+                            },
+                            Err(AskError::NotYourTurn) => {
+                                println!("Error: It's not your turn!");
+                            },
+                            Err(AskError::SameTeam) => {
+                                println!("Error: You cannot ask someone on your team!");
+                            },
+                            Err(AskError::PlayerNotFound) => {
+                                println!("Error: That player does not exist!");
+                            },
+                            Err(AskError::InvalidBook) => {
+                                println!("Error: You do not have this book in your hand!");
+                            },
+                            Err(AskError::AlreadyOwnCard) => {
+                                println!("Error: You have the card!");
+                            },
+                        }
+                        game_ref.check_game_end();
+                        Ok(CommandStatus::Done)
+                    }
+                },
         )
         .add(
             "next",
             command! { "Next move",
                 () => || {
-                    game_ref.handle_next();
+                    match game_ref.handle_next() {
+                        Ok(NextOutcome { asker, askee, card, outcome: AskOutcome::Success }) => 
+                            println!("Player {asker} asked Player {askee} for {card} and received YES."),
+                        Ok(NextOutcome { asker, askee, card, outcome: AskOutcome::Failure }) => 
+                            println!("Player {asker} asked Player {askee} for {card} and received NO."),
+                        Err(NextError::YourTurn) => println!("Error: It's your turn!"),
+                    }
                     game_ref.check_game_end();
                     Ok(CommandStatus::Done)
                 }
@@ -273,7 +340,14 @@ fn main() {
             "declare",
             command! {
                 "Declare", (book: Book) => |book| {
-                    game_ref.handle_declaration(*game_ref.curr_player.borrow(), book);
+                    match game_ref.handle_declaration(*game_ref.curr_player.borrow(), book) {
+                        DeclarationOutcome::Success => {
+                            println!("Successfully declared {book:?}");
+                        },
+                        DeclarationOutcome::Failure => {
+                            println!("Did not successfully declare {book:?}");
+                        }
+                    }
                     game_ref.check_game_end();
                     Ok(CommandStatus::Done)
                 }

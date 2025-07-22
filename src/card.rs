@@ -22,7 +22,7 @@ enum DisplayCard {
     Joker { big: bool },
 }
 
-#[derive(Clone, Hash, Eq, PartialEq)]
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Card {
     pub num: u8,
 }
