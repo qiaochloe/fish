@@ -1,4 +1,3 @@
-use anyhow::Result;
 use easy_repl::{command, CommandStatus, Repl};
 use rand::{rng, seq::SliceRandom, Rng};
 use std::cell::RefCell;
@@ -6,6 +5,8 @@ use std::collections::HashSet;
 use std::io::{self, Write};
 use std::rc::Rc;
 use std::vec::Vec;
+mod card;
+use crate::card::{Book, Card};
 
 #[derive(Debug)]
 struct Fish {
@@ -26,194 +27,6 @@ struct Player {
     cards: Vec<Card>,
 }
 
-#[derive(Clone, Hash, Eq, PartialEq)]
-struct Card {
-    book: Book,
-    num: u8, // 0-5
-}
-
-impl std::fmt::Display for Card {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.book == Book::Eights {
-            let card = match self.num {
-                0 => "8♦",
-                1 => "8♣",
-                2 => "8♥",
-                3 => "8♠",
-                4 => "SJ",
-                5 => "BJ",
-                _ => panic!("num should be 0-5"),
-            };
-            return write!(f, "{card}");
-        };
-        let rank = {
-            match self.book {
-                Book::LowDiamonds | Book::LowClubs | Book::LowHearts | Book::LowSpades => {
-                    &(self.num + 2).to_string()
-                }
-                Book::HighDiamonds | Book::HighClubs | Book::HighHearts | Book::HighSpades => {
-                    match self.num {
-                        0 => "9",
-                        1 => "10",
-                        2 => "J",
-                        3 => "Q",
-                        4 => "K",
-                        5 => "A",
-                        _ => panic!("num should be 0-5"),
-                    }
-                }
-                _ => panic!(""),
-            }
-        };
-        let suit = {
-            match self.book {
-                Book::LowDiamonds | Book::HighDiamonds => "♦",
-                Book::LowClubs | Book::HighClubs => "♣",
-                Book::LowHearts | Book::HighHearts => "♥",
-                Book::LowSpades | Book::HighSpades => "♠",
-                _ => panic!(""),
-            }
-        };
-        write!(f, "{rank}{suit}")
-    }
-}
-
-impl std::fmt::Debug for Card {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self}")
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct ParseCardError;
-impl std::fmt::Display for ParseCardError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Failed to parse card")
-    }
-}
-impl std::error::Error for ParseCardError {}
-impl std::str::FromStr for Card {
-    type Err = ParseCardError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // 10s
-        if s.len() == 3 && &s[0..2] == "10" {
-            let book = match s.chars().nth(2).unwrap() {
-                'D' => Book::HighDiamonds,
-                'C' => Book::HighClubs,
-                'H' => Book::HighHearts,
-                'S' => Book::HighSpades,
-                _ => return Err(ParseCardError),
-            };
-            return Ok(Card { book, num: 1 });
-        }
-
-        // Parse rank and suit
-        if s.len() != 2 {
-            return Err(ParseCardError);
-        }
-        let mut chars = s.chars();
-        let rank = chars.next().unwrap();
-        let suit = chars.next().unwrap();
-
-        match (rank, suit) {
-            // Eights
-            ('8', suit) => {
-                let num = match suit {
-                    'D' => 0,
-                    'C' => 1,
-                    'H' => 2,
-                    'S' => 3,
-                    _ => return Err(ParseCardError),
-                };
-                Ok(Card {
-                    book: Book::Eights,
-                    num,
-                })
-            }
-            ('S', 'J') => Ok(Card {
-                book: Book::Eights,
-                num: 4,
-            }),
-            ('B', 'J') => Ok(Card {
-                book: Book::Eights,
-                num: 5,
-            }),
-
-            // Regular cards
-            ('2'..='7' | '9' | 'J' | 'Q' | 'K' | 'A', 'D' | 'C' | 'H' | 'S') => {
-                let book = match rank {
-                    '2'..='7' => match suit {
-                        'D' => Book::LowDiamonds,
-                        'C' => Book::LowClubs,
-                        'H' => Book::LowHearts,
-                        'S' => Book::LowSpades,
-                        _ => unreachable!(),
-                    },
-                    _ => match suit {
-                        'D' => Book::HighDiamonds,
-                        'C' => Book::HighClubs,
-                        'H' => Book::HighHearts,
-                        'S' => Book::HighSpades,
-                        _ => unreachable!(),
-                    },
-                };
-                let num = match rank {
-                    '2' | '9' => 0,
-                    '3' => 1,
-                    '4' | 'J' => 2,
-                    '5' | 'Q' => 3,
-                    '6' | 'K' => 4,
-                    '7' | 'A' => 5,
-                    _ => unreachable!(),
-                };
-                Ok(Card { book, num })
-            }
-
-            _ => Err(ParseCardError),
-        }
-    }
-}
-
-#[derive(Clone, Hash, Copy, PartialEq, Eq, Debug)]
-enum Book {
-    LowDiamonds,  // 2-7
-    HighDiamonds, // 9-A
-    LowClubs,
-    HighClubs,
-    LowHearts,
-    HighHearts,
-    LowSpades,
-    HighSpades,
-    Eights, // Some variants remove the eights
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct ParseBookError;
-impl std::fmt::Display for ParseBookError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Failed to parse book")
-    }
-}
-impl std::error::Error for ParseBookError {}
-impl std::str::FromStr for Book {
-    type Err = ParseBookError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "LowDiamonds" => Ok(Book::LowDiamonds),
-            "HighDiamonds" => Ok(Book::HighDiamonds),
-            "LowClubs" => Ok(Book::LowClubs),
-            "HighClubs" => Ok(Book::HighClubs),
-            "LowHearts" => Ok(Book::LowHearts),
-            "HighHearts" => Ok(Book::HighHearts),
-            "LowSpades" => Ok(Book::LowSpades),
-            "HighSpades" => Ok(Book::HighSpades),
-            "Eights" => Ok(Book::Eights),
-            _ => Err(ParseBookError),
-        }
-    }
-}
-
 enum AskResult {
     Invalid,
     No,
@@ -226,26 +39,25 @@ enum DeclaractionResult {
 }
 
 impl Fish {
+    fn start(&self) {
+        println!("Welcome to Fish!");
+        println!("You are Player {}", self.your_index.borrow());
+        println!(
+            "Your cards: {:?}",
+            self.players.borrow()[*self.your_index.borrow()].cards
+        );
+        println!("It is Player {}'s turn", self.curr_player.borrow());
+    }
+
     fn init() -> Self {
         let num_teams = 2;
         let num_players = 6;
+        let num_cards = 54;
 
         // Instantiate deck and shuffle
         let mut deck = Vec::new();
-        for book in &[
-            Book::LowDiamonds,
-            Book::HighDiamonds,
-            Book::LowClubs,
-            Book::HighClubs,
-            Book::LowHearts,
-            Book::HighHearts,
-            Book::LowSpades,
-            Book::HighSpades,
-            Book::Eights,
-        ] {
-            for num in 0..6 {
-                deck.push(Card { book: *book, num });
-            }
+        for num in 0..num_cards {
+            deck.push(Card { num })
         }
         let mut rng = rng();
         deck.shuffle(&mut rng);
@@ -280,16 +92,8 @@ impl Fish {
         *self.curr_player.borrow_mut() = new_game.curr_player.take();
         *self.your_index.borrow_mut() = new_game.your_index.take();
         *self.num_players.borrow_mut() = new_game.num_players.take();
+        new_game.start();
     }
-
-    //     println!("Welcome to Fish!");
-    //     println!("You are Player {}", self.your_index);
-    //     println!(
-    //         "Your cards: {:?}",
-    //         self.players.borrow()[self.your_index].cards
-    //     );
-    //     println!("It is Player {}'s turn", self.curr_player.borrow());
-    // }
 
     fn handle_info(&self) {
         println!("You are Player {}", *self.your_index.borrow());
@@ -326,27 +130,19 @@ impl Fish {
         };
 
         // Error checking
-        if !asker.cards.iter().any(|c| c.book == card.book) {
+        if !asker.cards.iter().any(|c| c.book() == card.book()) {
             println!("Error: You do not have the suit!");
             return AskResult::Invalid;
         }
 
-        if asker
-            .cards
-            .iter()
-            .any(|c| c.book == card.book && c.num == card.num)
-        {
+        if asker.cards.contains(&card) {
             println!("Error: You have the card!");
             return AskResult::Invalid;
         }
 
         // Check if askee has the requested card
         // If so, move it to the asker's card list
-        if let Some(index) = askee
-            .cards
-            .iter()
-            .position(|c| c.book == card.book && c.num == card.num)
-        {
+        if let Some(index) = askee.cards.iter().position(|c| *c == card) {
             let item = askee.cards.remove(index);
             asker.cards.push(item);
             println!("Player {askee_idx} has the {card}");
@@ -362,9 +158,14 @@ impl Fish {
     fn handle_next(&self) {
         let mut curr_player = self.curr_player.borrow_mut();
         if *self.your_index.borrow() == *curr_player {
-            println!("It's your turn to ask!")
+            println!("It's your turn to ask!");
+            return;
         }
+
         *curr_player = (*curr_player + 1) % *self.num_players.borrow();
+        if *self.your_index.borrow() == *curr_player {
+            println!("It's your turn!")
+        }
     }
 
     fn handle_declaration(&self, declarer_idx: usize, book: Book) -> DeclaractionResult {
@@ -375,7 +176,7 @@ impl Fish {
             // Remove all cards of that book from the player
             let mut removed_cards = HashSet::new();
             player.cards.retain(|card| {
-                if card.book == book {
+                if card.book() == book {
                     removed_cards.insert(card.clone());
                     false
                 } else {
@@ -436,9 +237,10 @@ impl Fish {
 
 fn main() {
     let game = Fish::init();
-    let game_ref = &game;
+    game.start();
 
     // Create the repl
+    let game_ref = &game;
     let mut repl = Repl::builder()
         .add(
             "info",
@@ -473,6 +275,15 @@ fn main() {
                 "Declare", (book: Book) => |book| {
                     game_ref.handle_declaration(*game_ref.curr_player.borrow(), book);
                     game_ref.check_game_end();
+                    Ok(CommandStatus::Done)
+                }
+            },
+        )
+        .add(
+            "reset",
+            command! {
+                "Reset the game", () => || {
+                    game_ref.reset();
                     Ok(CommandStatus::Done)
                 }
             },
