@@ -1,4 +1,5 @@
 use anyhow::Result;
+use colored::Colorize;
 
 #[derive(Eq, PartialEq)]
 pub enum Suit {
@@ -98,7 +99,7 @@ impl Card {
         }
     }
 
-    fn display(&self) -> DisplayCard {
+    fn display_card(&self) -> DisplayCard {
         if self.num == 52 {
             return DisplayCard::Joker { big: false };
         }
@@ -195,7 +196,7 @@ impl std::fmt::Display for DisplayCard {
 
 impl std::fmt::Display for Card {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.display())
+        write!(f, "{}", self.display_card())
     }
 }
 
@@ -270,17 +271,55 @@ impl std::str::FromStr for Book {
     type Err = ParseBookError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "LowDiamonds" => Ok(Book::LowDiamonds),
-            "HighDiamonds" => Ok(Book::HighDiamonds),
-            "LowClubs" => Ok(Book::LowClubs),
-            "HighClubs" => Ok(Book::HighClubs),
-            "LowHearts" => Ok(Book::LowHearts),
-            "HighHearts" => Ok(Book::HighHearts),
-            "LowSpades" => Ok(Book::LowSpades),
-            "HighSpades" => Ok(Book::HighSpades),
-            "Eights" => Ok(Book::Eights),
+            "LowDiamonds" | "ld" => Ok(Book::LowDiamonds),
+            "HighDiamonds" | "hd" => Ok(Book::HighDiamonds),
+            "LowClubs" | "lc" => Ok(Book::LowClubs),
+            "HighClubs" | "hc" => Ok(Book::HighClubs),
+            "LowHearts" | "lh" => Ok(Book::LowHearts),
+            "HighHearts" | "hh" => Ok(Book::HighHearts),
+            "LowSpades" | "ls" => Ok(Book::LowSpades),
+            "HighSpades" | "hs" => Ok(Book::HighSpades),
+            "Eights" | "e" => Ok(Book::Eights),
             _ => Err(ParseBookError),
         }
+    }
+}
+
+// Format
+pub trait PrettyDisplay {
+    fn to_pretty_string(&self) -> String;
+}
+
+impl PrettyDisplay for Card {
+    fn to_pretty_string(&self) -> String {
+        match self.display_card() {
+            DisplayCard::Joker { big } => {
+                if big {
+                    self.to_string().blue()
+                } else {
+                    self.to_string().red()
+                }
+            }
+            DisplayCard::Standard { suit, .. } => match suit {
+                Suit::Diamonds => self.to_string().blue(),
+                Suit::Clubs => self.to_string().green(),
+                Suit::Hearts => self.to_string().red(),
+                Suit::Spades => self.to_string().bright_black(),
+            },
+        }
+        .to_string()
+    }
+}
+
+impl<T: PrettyDisplay> PrettyDisplay for Vec<T> {
+    fn to_pretty_string(&self) -> String {
+        format!(
+            "[{}]",
+            self.iter()
+                .map(|item| item.to_pretty_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
 

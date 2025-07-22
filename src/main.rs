@@ -5,8 +5,10 @@ use std::collections::HashSet;
 use std::io::{self, Write};
 use std::rc::Rc;
 use std::vec::Vec;
+use std::fmt::Debug;
+use colored::Colorize;
 mod card;
-use crate::card::{Book, Card};
+use crate::card::{Book, Card, PrettyDisplay};
 
 #[derive(Debug)]
 struct Fish {
@@ -18,13 +20,46 @@ struct Fish {
 }
 
 #[derive(Debug)]
+struct Printer {
+    use_color: Rc<RefCell<bool>>,
+}
+
+impl Printer {
+    fn to_pretty_string(&self, obj: &(impl Debug + PrettyDisplay)) -> String {
+        if *self.use_color.borrow() {
+            obj.to_pretty_string()
+        } else {
+            format!("{obj:?}")
+        }
+    }
+}
+
+#[derive(Debug)]
 struct Team {
     books: Vec<Book>,
 }
 
 #[derive(Debug)]
 struct Player {
+    idx: usize,
     cards: Vec<Card>,
+}
+
+impl PrettyDisplay for Player {
+    fn to_pretty_string(&self) -> String {
+        if self.idx % 2 == 0 {
+            format!("{}", format!("Player {}", self.idx).blue())
+        } else {
+            format!("{}", format!("Player {}", self.idx).red())
+        }
+    }
+}
+
+struct Ask {
+    asker: usize,
+    askee: usize,
+    card: Card,
+    outcome: AskOutcome
 }
 
 enum AskOutcome {
@@ -38,13 +73,6 @@ enum AskError {
     PlayerNotFound,
     InvalidBook,
     AlreadyOwnCard,
-}
-
-struct NextOutcome {
-    asker: usize,
-    askee: usize,
-    card: Card,
-    outcome: AskOutcome,
 }
 
 enum NextError {
@@ -79,9 +107,9 @@ impl Fish {
         // Instantiate players
         let num_cards = deck.len() / num_players;
         let mut players = vec![];
-        for _ in 0..num_players {
+        for idx in 0..num_players {
             let cards = deck.drain(0..num_cards).collect();
-            players.push(Player { cards })
+            players.push(Player { idx, cards })
         }
 
         Fish {
@@ -102,7 +130,7 @@ impl Fish {
         *self.num_players.borrow_mut() = new_game.num_players.take();
     }
 
-    fn handle_ask(&self, askee_idx: usize, card: &Card) -> Result<AskOutcome, AskError> {
+    fn handle_ask(&self, askee_idx: usize, card: &Card) -> Result<Ask, AskError> {
         let your_index = *self.your_index.borrow();
         let curr_player = *self.curr_player.borrow();
 
@@ -112,22 +140,26 @@ impl Fish {
         self.ask(askee_idx, card)
     }
 
-    fn ask(&self, askee_idx: usize, card: &Card) -> Result<AskOutcome, AskError> {
-        let mut curr_player = self.curr_player.borrow_mut();
+    fn ask(&self, askee_idx: usize, card: &Card) -> Result<Ask, AskError> {
+        // 1. The player must ask a player from the opposing team
+        // 2. The player must hold a card that is part of the requested book
+        // 3. The player may not ask for a card they already hold
+
+        let asker_idx = *self.curr_player.borrow();
         if askee_idx >= *self.num_players.borrow() {
             return Err(AskError::PlayerNotFound);
         }
-        if askee_idx % 2 == *curr_player % 2 {
+        if askee_idx % 2 == asker_idx % 2 {
             return Err(AskError::SameTeam);
         }
 
         // Get the asker and askee
         let mut players = self.players.borrow_mut();
-        let (a, b) = players.split_at_mut(std::cmp::max(*curr_player, askee_idx));
-        let (asker, askee) = if askee_idx < *curr_player {
+        let (a, b) = players.split_at_mut(std::cmp::max(asker_idx, askee_idx));
+        let (asker, askee) = if askee_idx < asker_idx {
             (&mut b[0], &mut a[askee_idx])
         } else {
-            (&mut a[*curr_player], &mut b[0])
+            (&mut a[asker_idx], &mut b[0])
         };
 
         if !asker.cards.iter().any(|c| c.book() == card.book()) {
@@ -139,44 +171,38 @@ impl Fish {
 
         // Check if askee has the requested card
         // If so, move it to the asker's card list
-        if let Some(index) = askee.cards.iter().position(|c| *c == *card) {
-            let item = askee.cards.remove(index);
-            asker.cards.push(item);
-            return Ok(AskOutcome::Success);
-        }
+        let outcome = {
+            if let Some(index) = askee.cards.iter().position(|c| *c == *card) {
+                let item = askee.cards.remove(index);
+                asker.cards.push(item);
+                AskOutcome::Success
+            } else {
+                *self.curr_player.borrow_mut() = askee_idx;
+                AskOutcome::Failure
+            }
+        };
 
-        *curr_player = askee_idx;
-        Ok(AskOutcome::Failure)
+        Ok(Ask {
+            asker: asker_idx,
+            askee: askee_idx,
+            card: card.clone(),
+            outcome
+        })
     }
 
-    fn handle_next(&self) -> Result<NextOutcome, NextError> {
+    fn handle_next(&self) -> Result<Ask, NextError> {
         let asker = *self.curr_player.borrow();
         let your_index = *self.your_index.borrow();
         let num_players = *self.num_players.borrow();
-
-        if your_index == asker {
-            return Err(NextError::YourTurn);
-        }
+        if your_index == asker { return Err(NextError::YourTurn) }
 
         // Randomly ask a user for a card
         loop {
             let rand_user = rand::rng().random_range(0..num_players);
-            let rand_card = Card {
-                num: rand::rng().random_range(0..54),
-            };
-
+            let rand_card = Card { num: rand::rng().random_range(0..54) };
             match self.ask(rand_user, &rand_card) {
-                Ok(outcome) => {
-                    return Ok(NextOutcome {
-                        asker,
-                        askee: rand_user,
-                        card: rand_card,
-                        outcome,
-                    });
-                }
-                Err(_) => {
-                    continue;
-                }
+                Ok(ask) => { return Ok(ask) }
+                Err(_) => { continue }
             }
         }
     }
@@ -258,46 +284,58 @@ impl Fish {
         }
     }
 
-    fn get_sorted_hand(&self, player: usize) -> Vec<Card> {
-        let mut cards = self.players.borrow()[player].cards.clone();
-        cards.sort();
-        cards
+    // Printers
+    fn print_hand(&self, player: usize, p: &Printer) -> String {
+        let mut players = self.players.borrow_mut();
+        players[player].cards.sort();
+        p.to_pretty_string(&players[player].cards)
+    }
+
+    // TODO: Can use this to print player names etc
+    fn print_player(&self, player: usize, p: &Printer) -> String {
+        let players = self.players.borrow();
+        p.to_pretty_string(&players[player])
     }
 }
 
 fn main() {
     let game = Fish::init();
+    let g = &game;
+
+    let printer = Printer {
+        use_color: Rc::new(RefCell::new(true)),
+    };
+    let p = &printer;
+
     println!("Welcome to Fish!");
-    println!("You are Player {}", game.your_index());
-    println!("Your cards: {:?}", game.get_sorted_hand(game.your_index()));
-    println!("It is Player {}'s turn", game.curr_player());
+    println!("You are {}", g.print_player(g.your_index(), p));
+    println!("Your cards: {}", &g.print_hand(g.your_index(), p));
+    println!("It is {}'s turn", g.print_player(g.curr_player(), p));
 
     // Create the repl
-    let game_ref = &game;
     let mut repl = Repl::builder()
         .add(
-            "info",
+            "i",
             command! { "Info", () => || {
-                let your_index = game_ref.your_index();
-                println!("You are Player {your_index}");
-                println!("Your cards: {:?}", game_ref.get_sorted_hand(your_index));
-                for i in 0..game_ref.num_players() {
-                    println!("Player {i}: {:?}", game_ref.get_sorted_hand(i));
+                println!("You are {}", g.print_player(g.your_index(), p));
+                println!("Your cards: {}", &g.print_hand(g.your_index(), p));
+                for i in 0..g.num_players() {
+                    println!("{}: {}", g.print_player(i, p), g.print_hand(i, p));
                 }
-                println!("It is Player {}'s turn", game_ref.curr_player());
+                println!("It is {}'s turn", g.print_player(g.curr_player(), p));
                         Ok(CommandStatus::Done)
                     }},
         )
         .add(
-            "ask",
+            "a",
             command! {
                     "Ask a player", (askee: usize, card: Card) => move |askee, card| {
-                        match game_ref.handle_ask(askee, &card) {
-                            Ok(AskOutcome::Success) => {
-                                println!("Player {askee} has the {}", &card);},
-                            Ok(AskOutcome::Failure) => {
-                                println!("Player {askee} does not have the {card}");
-                                println!("It is the turn of Player {askee}");
+                        match g.handle_ask(askee, &card) {
+                            Ok(Ask { askee, outcome: AskOutcome::Success, .. }) => {
+                                println!("{} has the {}", g.print_player(askee, p), p.to_pretty_string(&card));},
+                            Ok(Ask { askee, card, outcome: AskOutcome::Failure, .. }) => {
+                                println!("{} does not have the {}", g.print_player(askee, p), p.to_pretty_string(&card));
+                                println!("It is the turn of {}", g.print_player(askee, p));
                             },
                             Err(AskError::NotYourTurn) => {
                                 println!("Error: It's not your turn!");
@@ -315,32 +353,40 @@ fn main() {
                                 println!("Error: You have the card!");
                             },
                         }
-                        game_ref.check_game_end();
+                        g.check_game_end();
                         Ok(CommandStatus::Done)
                     }
                 },
         )
         .add(
-            "next",
+            "n",
             command! { "Next move",
                 () => || {
-                    match game_ref.handle_next() {
-                        Ok(NextOutcome { asker, askee, card, outcome: AskOutcome::Success }) => 
-                            println!("Player {asker} asked Player {askee} for {card} and received YES."),
-                        Ok(NextOutcome { asker, askee, card, outcome: AskOutcome::Failure }) => 
-                            println!("Player {asker} asked Player {askee} for {card} and received NO."),
+                    match g.handle_next() {
+                        Ok(Ask { asker, askee, card, outcome: AskOutcome::Success }) => 
+                            println!("{} asked {} for {} and received YES.",
+                                g.print_player(asker, p),
+                                g.print_player(askee, p),
+                                p.to_pretty_string(&card),
+                            ),
+                        Ok(Ask { asker, askee, card, outcome: AskOutcome::Failure }) => 
+                            println!("{} asked {} for {} and received NO.",
+                                g.print_player(asker, p),
+                                g.print_player(askee, p),
+                                p.to_pretty_string(&card),
+                            ),
                         Err(NextError::YourTurn) => println!("Error: It's your turn!"),
                     }
-                    game_ref.check_game_end();
+                    g.check_game_end();
                     Ok(CommandStatus::Done)
                 }
             },
         )
         .add(
-            "declare",
+            "d",
             command! {
                 "Declare", (book: Book) => |book| {
-                    match game_ref.handle_declaration(*game_ref.curr_player.borrow(), book) {
+                    match g.handle_declaration(*g.curr_player.borrow(), book) {
                         DeclarationOutcome::Success => {
                             println!("Successfully declared {book:?}");
                         },
@@ -348,16 +394,16 @@ fn main() {
                             println!("Did not successfully declare {book:?}");
                         }
                     }
-                    game_ref.check_game_end();
+                    g.check_game_end();
                     Ok(CommandStatus::Done)
                 }
             },
         )
         .add(
-            "reset",
+            "r",
             command! {
                 "Reset the game", () => || {
-                    game_ref.reset();
+                    g.reset();
                     Ok(CommandStatus::Done)
                 }
             },

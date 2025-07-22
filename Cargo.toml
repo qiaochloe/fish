@@ -5,5 +5,6 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.98"
+colored = "3.0.0"
 easy-repl = "0.2.1"
 rand = "0.9.2"
