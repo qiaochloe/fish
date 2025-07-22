@@ -138,7 +138,7 @@ impl DisplayCard {
                 }
 
                 let rank_index = match rank {
-                    Rank::Num(n @ 2..8) => n - 2,
+                    Rank::Num(n @ 2..=7) => n - 2,
                     Rank::Num(n @ 9..=10) => n - 3,
                     Rank::Jack => 8,
                     Rank::Queen => 9,

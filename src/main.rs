@@ -1,12 +1,12 @@
+use colored::Colorize;
 use easy_repl::{command, CommandStatus, Repl};
 use rand::{rng, seq::SliceRandom, Rng};
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::io::{self, Write};
 use std::rc::Rc;
 use std::vec::Vec;
-use std::fmt::Debug;
-use colored::Colorize;
 mod card;
 use crate::card::{Book, Card, PrettyDisplay};
 
@@ -59,7 +59,7 @@ struct Ask {
     asker: usize,
     askee: usize,
     card: Card,
-    outcome: AskOutcome
+    outcome: AskOutcome,
 }
 
 enum AskOutcome {
@@ -186,7 +186,7 @@ impl Fish {
             asker: asker_idx,
             askee: askee_idx,
             card: card.clone(),
-            outcome
+            outcome,
         })
     }
 
@@ -194,15 +194,19 @@ impl Fish {
         let asker = *self.curr_player.borrow();
         let your_index = *self.your_index.borrow();
         let num_players = *self.num_players.borrow();
-        if your_index == asker { return Err(NextError::YourTurn) }
+        if your_index == asker {
+            return Err(NextError::YourTurn);
+        }
 
         // Randomly ask a user for a card
         loop {
             let rand_user = rand::rng().random_range(0..num_players);
-            let rand_card = Card { num: rand::rng().random_range(0..54) };
+            let rand_card = Card {
+                num: rand::rng().random_range(0..54),
+            };
             match self.ask(rand_user, &rand_card) {
-                Ok(ask) => { return Ok(ask) }
-                Err(_) => { continue }
+                Ok(ask) => return Ok(ask),
+                Err(_) => continue,
             }
         }
     }
@@ -314,62 +318,63 @@ fn main() {
 
     // Create the repl
     let mut repl = Repl::builder()
+        .with_hints(false)
         .add(
             "i",
             command! { "Info", () => || {
-                println!("You are {}", g.print_player(g.your_index(), p));
-                println!("Your cards: {}", &g.print_hand(g.your_index(), p));
-                for i in 0..g.num_players() {
-                    println!("{}: {}", g.print_player(i, p), g.print_hand(i, p));
-                }
-                println!("It is {}'s turn", g.print_player(g.curr_player(), p));
-                        Ok(CommandStatus::Done)
-                    }},
+            println!("You are {}", g.print_player(g.your_index(), p));
+            println!("Your cards: {}", &g.print_hand(g.your_index(), p));
+            for i in 0..g.num_players() {
+                println!("{}: {}", g.print_player(i, p), g.print_hand(i, p));
+            }
+            println!("It is {}'s turn", g.print_player(g.curr_player(), p));
+                    Ok(CommandStatus::Done)
+                }},
         )
         .add(
             "a",
             command! {
-                    "Ask a player", (askee: usize, card: Card) => move |askee, card| {
-                        match g.handle_ask(askee, &card) {
-                            Ok(Ask { askee, outcome: AskOutcome::Success, .. }) => {
-                                println!("{} has the {}", g.print_player(askee, p), p.to_pretty_string(&card));},
-                            Ok(Ask { askee, card, outcome: AskOutcome::Failure, .. }) => {
-                                println!("{} does not have the {}", g.print_player(askee, p), p.to_pretty_string(&card));
-                                println!("It is the turn of {}", g.print_player(askee, p));
-                            },
-                            Err(AskError::NotYourTurn) => {
-                                println!("Error: It's not your turn!");
-                            },
-                            Err(AskError::SameTeam) => {
-                                println!("Error: You cannot ask someone on your team!");
-                            },
-                            Err(AskError::PlayerNotFound) => {
-                                println!("Error: That player does not exist!");
-                            },
-                            Err(AskError::InvalidBook) => {
-                                println!("Error: You do not have this book in your hand!");
-                            },
-                            Err(AskError::AlreadyOwnCard) => {
-                                println!("Error: You have the card!");
-                            },
-                        }
-                        g.check_game_end();
-                        Ok(CommandStatus::Done)
+                "Ask a player", (askee: usize, card: Card) => move |askee, card| {
+                    match g.handle_ask(askee, &card) {
+                        Ok(Ask { askee, outcome: AskOutcome::Success, .. }) => {
+                            println!("{} has the {}", g.print_player(askee, p), p.to_pretty_string(&card));},
+                        Ok(Ask { askee, card, outcome: AskOutcome::Failure, .. }) => {
+                            println!("{} does not have the {}", g.print_player(askee, p), p.to_pretty_string(&card));
+                            println!("It is the turn of {}", g.print_player(askee, p));
+                        },
+                        Err(AskError::NotYourTurn) => {
+                            println!("Error: It's not your turn!");
+                        },
+                        Err(AskError::SameTeam) => {
+                            println!("Error: You cannot ask someone on your team!");
+                        },
+                        Err(AskError::PlayerNotFound) => {
+                            println!("Error: That player does not exist!");
+                        },
+                        Err(AskError::InvalidBook) => {
+                            println!("Error: You do not have this book in your hand!");
+                        },
+                        Err(AskError::AlreadyOwnCard) => {
+                            println!("Error: You have the card!");
+                        },
                     }
-                },
+                    g.check_game_end();
+                    Ok(CommandStatus::Done)
+                }
+            },
         )
         .add(
             "n",
             command! { "Next move",
                 () => || {
                     match g.handle_next() {
-                        Ok(Ask { asker, askee, card, outcome: AskOutcome::Success }) => 
+                        Ok(Ask { asker, askee, card, outcome: AskOutcome::Success }) =>
                             println!("{} asked {} for {} and received YES.",
                                 g.print_player(asker, p),
                                 g.print_player(askee, p),
                                 p.to_pretty_string(&card),
                             ),
-                        Ok(Ask { asker, askee, card, outcome: AskOutcome::Failure }) => 
+                        Ok(Ask { asker, askee, card, outcome: AskOutcome::Failure }) =>
                             println!("{} asked {} for {} and received NO.",
                                 g.print_player(asker, p),
                                 g.print_player(askee, p),
