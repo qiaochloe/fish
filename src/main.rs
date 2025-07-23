@@ -2,7 +2,7 @@ use colored::Colorize;
 use easy_repl::{command, CommandStatus, Repl};
 use rand::{rng, seq::SliceRandom, Rng};
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::io::{self, Write};
 use std::rc::Rc;
@@ -17,6 +17,7 @@ struct Fish {
     curr_player: Rc<RefCell<usize>>,
     your_index: Rc<RefCell<usize>>,
     num_players: Rc<RefCell<usize>>,
+    num_cards: Rc<RefCell<usize>>,
 }
 
 #[derive(Debug)]
@@ -55,6 +56,7 @@ impl PrettyDisplay for Player {
     }
 }
 
+#[derive(Debug)]
 struct Ask {
     asker: usize,
     askee: usize,
@@ -62,11 +64,13 @@ struct Ask {
     outcome: AskOutcome,
 }
 
+#[derive(Copy, Clone, Debug)]
 enum AskOutcome {
     Success,
     Failure,
 }
 
+#[derive(Debug)]
 enum AskError {
     NotYourTurn,
     SameTeam,
@@ -75,25 +79,219 @@ enum AskError {
     AlreadyOwnCard,
 }
 
+#[derive(Debug)]
 enum NextError {
     YourTurn,
 }
 
-enum DeclarationOutcome {
+#[derive(Debug)]
+enum Event {
+    Ask(Ask),
+    Declare(Declare),
+}
+
+#[derive(Debug)]
+struct Declare {
+    book: Book,
+    outcome: DeclareOutcome,
+    // guesses:
+}
+
+#[derive(Debug)]
+enum DeclareOutcome {
     Success,
     Failure,
+}
+// Once a player is logically excluded from owning a card,
+// they may only gain it again through a public event
+#[derive(Debug)]
+struct Hand {
+    slots: Vec<Option<Constraint>>,
+    excluded_cards: HashSet<Card>,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum Constraint {
+    InBook(Book),
+    IsCard(Card),
+}
+
+type HandMap = HashMap<usize, Hand>;
+
+#[derive(Debug)]
+struct Engine {
+    num_players: Rc<RefCell<usize>>,
+    num_cards: Rc<RefCell<usize>>,
+    hand_map: Rc<RefCell<HandMap>>,
+}
+
+impl Engine {
+    fn init(g: &Fish) -> Self {
+        let num_players = g.num_players();
+        let num_cards = g.num_cards();
+        let hand_map: HandMap = (0..num_players)
+            .map(|i| {
+                (
+                    i,
+                    Hand {
+                        slots: vec![None; num_cards / num_players],
+                        excluded_cards: HashSet::new(),
+                    },
+                )
+            })
+            .collect();
+
+        Engine {
+            num_cards: Rc::new(RefCell::new(num_cards)),
+            num_players: Rc::new(RefCell::new(num_players)),
+            hand_map: Rc::new(RefCell::new(hand_map)),
+        }
+    }
+
+    fn reset(&self, g: &Fish) {
+        let new_engine: Engine = Engine::init(g);
+        *self.num_players.borrow_mut() = new_engine.num_players.take();
+        *self.num_cards.borrow_mut() = new_engine.num_cards.take();
+        *self.hand_map.borrow_mut() = new_engine.hand_map.take();
+    }
+
+    fn update_constraints(&self, event: Event) {
+        match event {
+            Event::Ask(Ask {
+                asker,
+                askee,
+                card,
+                outcome: AskOutcome::Success,
+            }) => {
+                // Asker has 1 card of the book
+                self.has_book(asker, card.book());
+                self.remove_card(askee, card);
+                self.add_card(asker, card);
+            }
+            Event::Ask(Ask {
+                asker,
+                askee,
+                card,
+                outcome: AskOutcome::Failure,
+            }) => {
+                // Asker has 1 card of the book
+                // Askee does not have the card
+                self.has_book(asker, card.book());
+                self.not_own_card(asker, card);
+                self.not_own_card(askee, card);
+            }
+            Event::Declare(Declare { book, .. }) => {
+                // No one has cards of the book anymore
+                for card in book.cards() {
+                    for i in 0..*self.num_players.borrow() {
+                        self.remove_card(i, card);
+                    }
+                }
+            }
+        }
+        dbg!(self.hand_map.borrow());
+    }
+
+    /// Player owns book. Update a None constraint if player does not already
+    /// have a card of that book or hold the OwnBook constraint
+    fn has_book(&self, player: usize, book: Book) {
+        let mut hand_map = self.hand_map.borrow_mut();
+        let hand = hand_map.get_mut(&player).unwrap();
+        hand.slots.sort_by_key(|slot| match slot {
+            Some(Constraint::IsCard(_)) => 0,
+            Some(Constraint::InBook(_)) => 1,
+            None => 2,
+        });
+
+        for slot in hand.slots.iter_mut() {
+            match slot {
+                Some(Constraint::IsCard(c)) => {
+                    if book == c.book() {
+                        return;
+                    }
+                }
+                Some(Constraint::InBook(b)) => {
+                    if book == *b {
+                        return;
+                    }
+                }
+                None => {
+                    *slot = Some(Constraint::InBook(book));
+                    return;
+                }
+            }
+        }
+        panic!("No slot available to add book constraint");
+    }
+
+    /// Add a card to one of the player's slots
+    /// And add it to the excluded cards of all other players
+    fn add_card(&self, player: usize, card: Card) {
+        let mut hand_map = self.hand_map.borrow_mut();
+        for (id, hand) in hand_map.iter_mut() {
+            if *id == player {
+                hand.slots.push(Some(Constraint::IsCard(card)));
+            } else {
+                hand.excluded_cards.insert(card);
+            }
+        }
+    }
+
+    /// Player no longer owns a card. Remove the first OwnCard constraint,
+    /// OwnBook constraint, or a None constraint in that order
+    fn remove_card(&self, player: usize, card: Card) {
+        let mut hand_map = self.hand_map.borrow_mut();
+        let hand = hand_map.get_mut(&player).unwrap();
+        hand.slots.sort_by_key(|slot| match slot {
+            Some(Constraint::IsCard(_)) => 0,
+            Some(Constraint::InBook(_)) => 1,
+            None => 2,
+        });
+
+        if let Some(idx) = hand.slots.iter().position(|slot| match slot {
+            Some(Constraint::IsCard(c)) if *c == card => true,
+            Some(Constraint::InBook(b)) if *b == card.book() => true,
+            None => true,
+            _ => false,
+        }) {
+            hand.slots.remove(idx);
+        } else {
+            panic!("No slot available to remove");
+        }
+    }
+
+    /// Players do not own the card
+    fn not_own_card(&self, player: usize, card: Card) {
+        let mut hand_map = self.hand_map.borrow_mut();
+        let hand = hand_map.get_mut(&player).unwrap();
+        hand.excluded_cards.insert(card);
+    }
+}
+
+impl Printer {
+    // Printers
+    fn print_hand(&self, player: usize, g: &Fish) -> String {
+        let mut players = g.players.borrow_mut();
+        players[player].cards.sort();
+        self.to_pretty_string(&players[player].cards)
+    }
+
+    fn print_player(&self, player: usize, g: &Fish) -> String {
+        let players = g.players.borrow();
+        self.to_pretty_string(&players[player])
+    }
 }
 
 impl Fish {
     fn init() -> Self {
         let num_teams = 2;
-        let num_players = 6;
-        let num_cards = 54;
+        let num_players: usize = 6;
+        let num_cards: usize = 54;
 
         // Instantiate deck and shuffle
         let mut deck = Vec::new();
         for num in 0..num_cards {
-            deck.push(Card { num })
+            deck.push(Card { num: num as u8 })
         }
         let mut rng = rng();
         deck.shuffle(&mut rng);
@@ -105,10 +303,9 @@ impl Fish {
         }
 
         // Instantiate players
-        let num_cards = deck.len() / num_players;
         let mut players = vec![];
         for idx in 0..num_players {
-            let cards = deck.drain(0..num_cards).collect();
+            let cards = deck.drain(0..num_cards / num_players).collect();
             players.push(Player { idx, cards })
         }
 
@@ -118,6 +315,7 @@ impl Fish {
             curr_player: Rc::new(RefCell::new(rng.random_range(0..num_players))),
             your_index: Rc::new(RefCell::new(rng.random_range(0..num_players))),
             num_players: Rc::new(RefCell::new(num_players)),
+            num_cards: Rc::new(RefCell::new(num_cards)),
         }
     }
 
@@ -185,7 +383,7 @@ impl Fish {
         Ok(Ask {
             asker: asker_idx,
             askee: askee_idx,
-            card: card.clone(),
+            card: *card,
             outcome,
         })
     }
@@ -211,7 +409,7 @@ impl Fish {
         }
     }
 
-    fn handle_declaration(&self, declarer_idx: usize, book: Book) -> DeclarationOutcome {
+    fn handle_declaration(&self, declarer_idx: usize, book: Book) -> Declare {
         let mut players = self.players.borrow_mut();
         let mut good_declaration: bool = true;
 
@@ -220,7 +418,7 @@ impl Fish {
             let mut removed_cards = HashSet::new();
             player.cards.retain(|card| {
                 if card.book() == book {
-                    removed_cards.insert(card.clone());
+                    removed_cards.insert(*card);
                     false
                 } else {
                     true
@@ -241,11 +439,17 @@ impl Fish {
 
         if good_declaration {
             teams[declarer_idx % 2].books.push(book);
-            return DeclarationOutcome::Success;
+            return Declare {
+                book,
+                outcome: DeclareOutcome::Success,
+            };
         }
 
         teams[(declarer_idx + 1) % 2].books.push(book);
-        DeclarationOutcome::Failure
+        Declare {
+            book,
+            outcome: DeclareOutcome::Failure,
+        }
     }
 
     fn check_game_end(&self) -> bool {
@@ -271,6 +475,10 @@ impl Fish {
         *self.num_players.borrow()
     }
 
+    fn num_cards(&self) -> usize {
+        *self.num_cards.borrow()
+    }
+
     fn get_cards() -> Vec<Card> {
         io::stdout().flush().unwrap();
         let mut input = String::new();
@@ -287,24 +495,14 @@ impl Fish {
             }
         }
     }
-
-    // Printers
-    fn print_hand(&self, player: usize, p: &Printer) -> String {
-        let mut players = self.players.borrow_mut();
-        players[player].cards.sort();
-        p.to_pretty_string(&players[player].cards)
-    }
-
-    // TODO: Can use this to print player names etc
-    fn print_player(&self, player: usize, p: &Printer) -> String {
-        let players = self.players.borrow();
-        p.to_pretty_string(&players[player])
-    }
 }
 
 fn main() {
     let game = Fish::init();
     let g = &game;
+
+    let engine = Engine::init(g);
+    let e = &engine;
 
     let printer = Printer {
         use_color: Rc::new(RefCell::new(true)),
@@ -312,9 +510,9 @@ fn main() {
     let p = &printer;
 
     println!("Welcome to Fish!");
-    println!("You are {}", g.print_player(g.your_index(), p));
-    println!("Your cards: {}", &g.print_hand(g.your_index(), p));
-    println!("It is {}'s turn", g.print_player(g.curr_player(), p));
+    println!("You are {}", p.print_player(g.your_index(), g));
+    println!("It is {}'s turn", p.print_player(g.curr_player(), g));
+    println!("Your cards: {}", &p.print_hand(g.your_index(), g));
 
     // Create the repl
     let mut repl = Repl::builder()
@@ -322,25 +520,35 @@ fn main() {
         .add(
             "i",
             command! { "Info", () => || {
-            println!("You are {}", g.print_player(g.your_index(), p));
-            println!("Your cards: {}", &g.print_hand(g.your_index(), p));
-            for i in 0..g.num_players() {
-                println!("{}: {}", g.print_player(i, p), g.print_hand(i, p));
-            }
-            println!("It is {}'s turn", g.print_player(g.curr_player(), p));
+                    println!("You are {}", p.print_player(g.your_index(), g));
+                    println!("It is {}'s turn", p.print_player(g.curr_player(), g));
+                    println!("Your cards: {}", &p.print_hand(g.your_index(), g));
+                    for i in 0..g.num_players() {
+                        println!("{}: {}", p.print_player(i, g), p.print_hand(i, g));
+                    }
                     Ok(CommandStatus::Done)
-                }},
+                }
+            },
         )
         .add(
             "a",
             command! {
-                "Ask a player", (askee: usize, card: Card) => move |askee, card| {
+                "Ask a player for a card (a 1 QD)", (askee: usize, card: Card) => move |askee, card| {
                     match g.handle_ask(askee, &card) {
-                        Ok(Ask { askee, outcome: AskOutcome::Success, .. }) => {
-                            println!("{} has the {}", g.print_player(askee, p), p.to_pretty_string(&card));},
-                        Ok(Ask { askee, card, outcome: AskOutcome::Failure, .. }) => {
-                            println!("{} does not have the {}", g.print_player(askee, p), p.to_pretty_string(&card));
-                            println!("It is the turn of {}", g.print_player(askee, p));
+                        Ok(ask @ Ask { askee, outcome, .. }) => {
+                            // Printer
+                            match outcome {
+                                AskOutcome::Success => {
+                                    println!("{} has the {}", p.print_player(askee, g), p.to_pretty_string(&card));
+                                },
+                                AskOutcome::Failure => {
+                                    println!("{} does not have the {}", p.print_player(askee, g), p.to_pretty_string(&card));
+                                    println!("It is the turn of {}", p.print_player(askee, g));
+                                }
+                            }
+
+                            // Engine
+                            e.update_constraints(Event::Ask(ask));
                         },
                         Err(AskError::NotYourTurn) => {
                             println!("Error: It's not your turn!");
@@ -365,21 +573,22 @@ fn main() {
         )
         .add(
             "n",
-            command! { "Next move",
+            command! { "Next",
                 () => || {
                     match g.handle_next() {
-                        Ok(Ask { asker, askee, card, outcome: AskOutcome::Success }) =>
-                            println!("{} asked {} for {} and received YES.",
-                                g.print_player(asker, p),
-                                g.print_player(askee, p),
+                        Ok(ask @ Ask { asker, askee, card, outcome }) => {
+                            // Printer
+                            let response = match outcome { AskOutcome::Success => "YES", AskOutcome::Failure => "NO" };
+                            println!("{} asked {} for {} and received {response}.",
+                                p.print_player(asker, g),
+                                p.print_player(askee, g),
                                 p.to_pretty_string(&card),
-                            ),
-                        Ok(Ask { asker, askee, card, outcome: AskOutcome::Failure }) =>
-                            println!("{} asked {} for {} and received NO.",
-                                g.print_player(asker, p),
-                                g.print_player(askee, p),
-                                p.to_pretty_string(&card),
-                            ),
+                            );
+
+                            // Engine
+                            e.update_constraints(Event::Ask(ask));
+
+                        },
                         Err(NextError::YourTurn) => println!("Error: It's your turn!"),
                     }
                     g.check_game_end();
@@ -390,15 +599,20 @@ fn main() {
         .add(
             "d",
             command! {
-                "Declare", (book: Book) => |book| {
-                    match g.handle_declaration(*g.curr_player.borrow(), book) {
-                        DeclarationOutcome::Success => {
+                "Declare (d lh)", (book: Book) => |book| {
+                    // Printer
+                    let declare = g.handle_declaration(*g.curr_player.borrow(), book);
+                    match declare.outcome {
+                        DeclareOutcome::Success => {
                             println!("Successfully declared {book:?}");
                         },
-                        DeclarationOutcome::Failure => {
+                        DeclareOutcome::Failure => {
                             println!("Did not successfully declare {book:?}");
                         }
                     }
+
+                    // Engine
+                    e.update_constraints(Event::Declare(declare));
                     g.check_game_end();
                     Ok(CommandStatus::Done)
                 }
@@ -409,6 +623,7 @@ fn main() {
             command! {
                 "Reset the game", () => || {
                     g.reset();
+                    e.reset(g);
                     Ok(CommandStatus::Done)
                 }
             },

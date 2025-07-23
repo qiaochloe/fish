@@ -23,12 +23,12 @@ enum DisplayCard {
     Joker { big: bool },
 }
 
-#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Card {
     pub num: u8,
 }
 
-#[derive(Clone, Hash, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Hash, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Book {
     LowDiamonds,  // 2-7
     HighDiamonds, // 9-A
@@ -151,6 +151,19 @@ impl DisplayCard {
             }
         };
         Card { num }
+    }
+}
+
+impl Book {
+    pub fn cards(&self) -> Vec<Card> {
+        let offset = *self as u8;
+        let mut output = vec![];
+        for i in 0..6 {
+            output.push(Card {
+                num: offset * 6 + i,
+            });
+        }
+        output
     }
 }
 
