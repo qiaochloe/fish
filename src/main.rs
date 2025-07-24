@@ -239,7 +239,7 @@ impl Engine {
                     None => true,
                     _ => false,
                 }) {
-                    hand.slots.insert(idx, Some(Constraint::IsCard(card)))
+                    hand.slots[idx] = Some(Constraint::IsCard(card))
                 } else {
                     panic!("No slot available to add card constraint");
                 }
