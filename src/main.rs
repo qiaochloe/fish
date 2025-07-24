@@ -93,8 +93,8 @@ enum Event {
 #[derive(Debug)]
 struct Declare {
     book: Book,
+    actual_cards: HashMap<usize, HashSet<Card>>,
     outcome: DeclareOutcome,
-    // guesses:
 }
 
 #[derive(Debug)]
@@ -184,16 +184,15 @@ impl Engine {
                 self.not_own_card(asker, card);
                 self.not_own_card(askee, card);
             }
-            Event::Declare(Declare { book, .. }) => {
+            Event::Declare(Declare { actual_cards, .. }) => {
                 // No one has cards of the book anymore
-                for card in book.cards() {
-                    for i in 0..*self.num_players.borrow() {
-                        self.remove_card(i, card);
+                for (player, cards) in actual_cards.iter() {
+                    for card in cards {
+                        self.remove_card(*player, *card);
                     }
                 }
             }
         }
-        dbg!(self.hand_map.borrow());
     }
 
     /// Player owns book. Update a None constraint if player does not already
@@ -437,6 +436,7 @@ impl Fish {
     fn handle_declaration(&self, declarer_idx: usize, book: Book) -> Declare {
         let mut players = self.players.borrow_mut();
         let mut good_declaration: bool = true;
+        let mut actual_cards = HashMap::new();
 
         for (i, player) in players.iter_mut().enumerate() {
             // Remove all cards of that book from the player
@@ -458,6 +458,8 @@ impl Fish {
                     good_declaration = false;
                 }
             }
+
+            actual_cards.insert(i, removed_cards);
         }
 
         let mut teams = self.teams.borrow_mut();
@@ -466,6 +468,7 @@ impl Fish {
             teams[declarer_idx % 2].books.push(book);
             return Declare {
                 book,
+                actual_cards,
                 outcome: DeclareOutcome::Success,
             };
         }
@@ -473,6 +476,7 @@ impl Fish {
         teams[(declarer_idx + 1) % 2].books.push(book);
         Declare {
             book,
+            actual_cards,
             outcome: DeclareOutcome::Failure,
         }
     }
