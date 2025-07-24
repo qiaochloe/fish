@@ -155,6 +155,10 @@ impl Engine {
         *self.hand_map.borrow_mut() = new_engine.hand_map.take();
     }
 
+    fn register_hand(&self, player: usize, cards: &[Card]) {
+        cards.iter().for_each(|card| self.has_card(player, *card));
+    }
+
     fn update_constraints(&self, event: Event) {
         match event {
             Event::Ask(Ask {
@@ -196,6 +200,7 @@ impl Engine {
     /// have a card of that book or hold the OwnBook constraint
     fn has_book(&self, player: usize, book: Book) {
         let mut hand_map = self.hand_map.borrow_mut();
+
         let hand = hand_map.get_mut(&player).unwrap();
         hand.slots.sort_by_key(|slot| match slot {
             Some(Constraint::IsCard(_)) => 0,
@@ -205,23 +210,43 @@ impl Engine {
 
         for slot in hand.slots.iter_mut() {
             match slot {
-                Some(Constraint::IsCard(c)) => {
-                    if book == c.book() {
-                        return;
-                    }
-                }
-                Some(Constraint::InBook(b)) => {
-                    if book == *b {
-                        return;
-                    }
-                }
+                Some(Constraint::IsCard(c)) if book == c.book() => return,
+                Some(Constraint::InBook(b)) if book == *b => return,
                 None => {
                     *slot = Some(Constraint::InBook(book));
                     return;
                 }
+                _ => continue,
             }
         }
         panic!("No slot available to add book constraint");
+    }
+
+    /// Player has a card. Update constraints if there are any
+    fn has_card(&self, player: usize, card: Card) {
+        let mut hand_map = self.hand_map.borrow_mut();
+
+        for (id, hand) in hand_map.iter_mut() {
+            if *id == player {
+                hand.slots.sort_by_key(|slot| match slot {
+                    Some(Constraint::IsCard(_)) => 0,
+                    Some(Constraint::InBook(_)) => 1,
+                    None => 2,
+                });
+                if let Some(idx) = hand.slots.iter().position(|slot| match slot {
+                    Some(Constraint::IsCard(c)) if *c == card => true,
+                    Some(Constraint::InBook(b)) if *b == card.book() => true,
+                    None => true,
+                    _ => false,
+                }) {
+                    hand.slots.insert(idx, Some(Constraint::IsCard(card)))
+                } else {
+                    panic!("No slot available to add card constraint");
+                }
+            } else {
+                hand.excluded_cards.insert(card);
+            }
+        }
     }
 
     /// Add a card to one of the player's slots
@@ -467,6 +492,10 @@ impl Fish {
         *self.your_index.borrow()
     }
 
+    fn your_hand(&self) -> Vec<Card> {
+        self.players.borrow()[self.your_index()].cards.clone()
+    }
+
     fn curr_player(&self) -> usize {
         *self.curr_player.borrow()
     }
@@ -503,6 +532,7 @@ fn main() {
 
     let engine = Engine::init(g);
     let e = &engine;
+    e.register_hand(g.your_index(), &g.your_hand());
 
     let printer = Printer {
         use_color: Rc::new(RefCell::new(true)),
