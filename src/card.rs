@@ -1,5 +1,4 @@
 use anyhow::Result;
-use colored::Colorize;
 
 #[derive(Eq, PartialEq)]
 pub enum Suit {
@@ -18,7 +17,7 @@ pub enum Rank {
     Ace,
 }
 
-enum DisplayCard {
+pub enum DisplayCard {
     Standard { suit: Suit, rank: Rank },
     Joker { big: bool },
 }
@@ -57,7 +56,7 @@ impl Card {
         }
     }
 
-    fn suit(&self) -> Option<Suit> {
+    pub fn suit(&self) -> Option<Suit> {
         if self.num >= 52 {
             None
         } else {
@@ -78,7 +77,7 @@ impl Card {
         }
     }
 
-    fn rank(&self) -> Option<Rank> {
+    pub fn rank(&self) -> Option<Rank> {
         if self.num >= 52 {
             None
         } else {
@@ -99,7 +98,7 @@ impl Card {
         }
     }
 
-    fn display_card(&self) -> DisplayCard {
+    pub fn display_card(&self) -> DisplayCard {
         if self.num == 52 {
             return DisplayCard::Joker { big: false };
         }
@@ -295,44 +294,6 @@ impl std::str::FromStr for Book {
             "Eights" | "e" => Ok(Book::Eights),
             _ => Err(ParseBookError),
         }
-    }
-}
-
-// Format
-pub trait PrettyDisplay {
-    fn to_pretty_string(&self) -> String;
-}
-
-impl PrettyDisplay for Card {
-    fn to_pretty_string(&self) -> String {
-        match self.display_card() {
-            DisplayCard::Joker { big } => {
-                if big {
-                    self.to_string().blue()
-                } else {
-                    self.to_string().red()
-                }
-            }
-            DisplayCard::Standard { suit, .. } => match suit {
-                Suit::Diamonds => self.to_string().blue(),
-                Suit::Clubs => self.to_string().green(),
-                Suit::Hearts => self.to_string().red(),
-                Suit::Spades => self.to_string().bright_black(),
-            },
-        }
-        .to_string()
-    }
-}
-
-impl<T: PrettyDisplay> PrettyDisplay for Vec<T> {
-    fn to_pretty_string(&self) -> String {
-        format!(
-            "[{}]",
-            self.iter()
-                .map(|item| item.to_pretty_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
     }
 }
 
