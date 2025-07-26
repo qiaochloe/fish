@@ -1,10 +1,14 @@
+// TODO: Extend engine to work with any number of cards and books
+
 use colored::Colorize;
 use easy_repl::{command, CommandStatus, Repl};
 use rand::{rng, seq::SliceRandom, Rng};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::io::{self, Write};
+use std::fmt::Write as FmtWrite;
+use std::io;
+use std::io::Write;
 use std::rc::Rc;
 use std::vec::Vec;
 mod card;
@@ -116,20 +120,20 @@ enum Constraint {
     IsCard(Card),
 }
 
-type HandMap = HashMap<usize, Hand>;
+// type ProbDist = HashMap<usize, f32>;
 
 #[derive(Debug)]
 struct Engine {
     num_players: Rc<RefCell<usize>>,
     num_cards: Rc<RefCell<usize>>,
-    hand_map: Rc<RefCell<HandMap>>,
+    hand_map: Rc<RefCell<HashMap<usize, Hand>>>,
 }
 
 impl Engine {
     fn init(g: &Fish) -> Self {
         let num_players = g.num_players();
         let num_cards = g.num_cards();
-        let hand_map: HandMap = (0..num_players)
+        let hand_map = (0..num_players)
             .map(|i| {
                 (
                     i,
@@ -185,7 +189,6 @@ impl Engine {
                 self.not_own_card(askee, card);
             }
             Event::Declare(Declare { actual_cards, .. }) => {
-                // No one has cards of the book anymore
                 for (player, cards) in actual_cards.iter() {
                     for card in cards {
                         self.remove_card(*player, *card);
@@ -254,6 +257,7 @@ impl Engine {
         let mut hand_map = self.hand_map.borrow_mut();
         for (id, hand) in hand_map.iter_mut() {
             if *id == player {
+                hand.excluded_cards.insert(card);
                 hand.slots.push(Some(Constraint::IsCard(card)));
             } else {
                 hand.excluded_cards.insert(card);
@@ -290,6 +294,68 @@ impl Engine {
         let hand = hand_map.get_mut(&player).unwrap();
         hand.excluded_cards.insert(card);
     }
+
+    // TODO: naive prune, need to see if incremental prune is possible
+    fn prune(&self) -> HashMap<usize, Vec<Vec<Card>>> {
+        let mut output = HashMap::new();
+        let all_cards: HashSet<Card> = { 0..54 }.map(|n| Card { num: n }).collect();
+
+        let hand_map = self.hand_map.borrow();
+        for (player, hand) in hand_map.iter() {
+            output.insert(
+                *player,
+                hand.slots
+                    .iter()
+                    .map(|slot| match slot {
+                        Some(Constraint::IsCard(card)) => vec![*card],
+                        Some(Constraint::InBook(book)) => book
+                            .cards()
+                            .into_iter()
+                            .filter(|c| !hand.excluded_cards.contains(c))
+                            .collect(),
+                        None => all_cards
+                            .clone()
+                            .into_iter()
+                            .filter(|c| !hand.excluded_cards.contains(c))
+                            .collect(),
+                    })
+                    .collect(),
+            );
+        }
+        output
+    }
+
+    fn num_players(&self) -> usize {
+        return *self.num_players.borrow();
+    }
+}
+
+type Slot = Option<Constraint>;
+
+impl PrettyDisplay for Slot {
+    fn to_pretty_string(&self) -> String {
+        match self {
+            Some(Constraint::IsCard(card)) => card.to_pretty_string(),
+            Some(Constraint::InBook(book)) => book.to_pretty_string(),
+            None => "None".to_string(),
+        }
+    }
+}
+
+impl PrettyDisplay for Book {
+    fn to_pretty_string(&self) -> String {
+        match *self {
+            Self::LowDiamonds => "LD".blue().to_string(),
+            Self::HighDiamonds => "HD".blue().to_string(),
+            Self::LowClubs => "LC".green().to_string(),
+            Self::HighClubs => "HC".green().to_string(),
+            Self::LowHearts => "LH".red().to_string(),
+            Self::HighHearts => "HH".red().to_string(),
+            Self::LowSpades => "LS".bright_black().to_string(),
+            Self::HighSpades => "HS".bright_black().to_string(),
+            Self::Eights => "E".purple().to_string(),
+        }
+    }
 }
 
 impl Printer {
@@ -303,6 +369,18 @@ impl Printer {
     fn print_player(&self, player: usize, g: &Fish) -> String {
         let players = g.players.borrow();
         self.to_pretty_string(&players[player])
+    }
+
+    fn print_constraints(&self, e: &Engine, g: &Fish) -> String {
+        let mut output = String::new();
+        let map = e.prune();
+        for (player, hand) in map.iter() {
+            writeln!(output, "{}", self.print_player(*player, g)).unwrap();
+            for (i, slot) in hand.iter().enumerate() {
+                writeln!(&mut output, "Slot {i}: {}", self.to_pretty_string(slot)).unwrap();
+            }
+        }
+        output.to_string()
     }
 }
 
@@ -605,6 +683,12 @@ fn main() {
                 }
             },
         )
+        .add("c", command ! {
+            "Constraints", () => || {
+                println!("{}", p.print_constraints(e, g));
+                Ok(CommandStatus::Done)
+            }
+        })
         .add(
             "n",
             command! { "Next",
@@ -621,7 +705,6 @@ fn main() {
 
                             // Engine
                             e.update_constraints(Event::Ask(ask));
-
                         },
                         Err(NextError::YourTurn) => println!("Error: It's your turn!"),
                     }
