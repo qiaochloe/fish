@@ -1,5 +1,6 @@
 // TODO: Extend engine to work with any number of cards and books
 
+use clap::Parser;
 use colored::Colorize;
 use easy_repl::{command, CommandStatus, Repl};
 use rand::{rng, seq::SliceRandom, Rng};
@@ -25,8 +26,9 @@ struct Fish {
     teams: Rc<RefCell<Vec<Team>>>,
     players: Rc<RefCell<Vec<Player>>>,
     curr_player: Rc<RefCell<usize>>,
-    your_index: Rc<RefCell<usize>>,
+
     num_players: Rc<RefCell<usize>>,
+    num_humans: Rc<RefCell<u8>>,
     num_cards: Rc<RefCell<usize>>,
 }
 
@@ -39,6 +41,7 @@ struct Team {
 struct Player {
     idx: usize,
     cards: Vec<Card>,
+    is_bot: bool,
 }
 
 #[derive(Debug)]
@@ -57,7 +60,7 @@ enum AskOutcome {
 
 #[derive(Debug)]
 enum AskError {
-    NotYourTurn,
+    BotTurn,
     SameTeam,
     PlayerNotFound,
     InvalidBook,
@@ -66,7 +69,7 @@ enum AskError {
 
 #[derive(Debug)]
 enum NextError {
-    YourTurn,
+    HumanTurn,
 }
 
 #[derive(Debug)]
@@ -105,7 +108,7 @@ impl PrettyDisplay for Book {
 }
 
 impl Fish {
-    fn init() -> Self {
+    fn init(num_humans: u8) -> Self {
         let num_teams = 2;
         let num_players: usize = 6;
         let num_cards: usize = 54;
@@ -124,38 +127,43 @@ impl Fish {
             teams.push(Team { books: vec![] })
         }
 
-        // Instantiate players
+        // Instantiate players (humans and bots)
+        let mut bot_idxs: Vec<usize> = (0..num_players).collect();
+        deck.shuffle(&mut rng);
+        for _ in 0..num_humans {
+            bot_idxs.pop();
+        }
+
         let mut players = vec![];
         for idx in 0..num_players {
             let cards = deck.drain(0..num_cards / num_players).collect();
-            players.push(Player { idx, cards })
+            let is_bot = bot_idxs.contains(&idx);
+            players.push(Player { idx, cards, is_bot })
         }
 
         Fish {
             teams: Rc::new(RefCell::new(teams)),
             players: Rc::new(RefCell::new(players)),
             curr_player: Rc::new(RefCell::new(rng.random_range(0..num_players))),
-            your_index: Rc::new(RefCell::new(rng.random_range(0..num_players))),
+
+            num_humans: Rc::new(RefCell::new(num_humans)),
             num_players: Rc::new(RefCell::new(num_players)),
             num_cards: Rc::new(RefCell::new(num_cards)),
         }
     }
 
     fn reset(&self) {
-        let new_game: Fish = Fish::init();
+        let new_game: Fish = Fish::init(*self.num_humans.borrow());
         *self.teams.borrow_mut() = new_game.teams.take();
         *self.players.borrow_mut() = new_game.players.take();
         *self.curr_player.borrow_mut() = new_game.curr_player.take();
-        *self.your_index.borrow_mut() = new_game.your_index.take();
         *self.num_players.borrow_mut() = new_game.num_players.take();
     }
 
     fn handle_ask(&self, askee_idx: usize, card: &Card) -> Result<Ask, AskError> {
-        let your_index = *self.your_index.borrow();
-        let curr_player = *self.curr_player.borrow();
-
-        if curr_player != your_index {
-            return Err(AskError::NotYourTurn);
+        let asker_idx = *self.curr_player.borrow();
+        if self.players.borrow()[asker_idx].is_bot {
+            return Err(AskError::BotTurn);
         }
         self.ask(askee_idx, card)
     }
@@ -211,11 +219,11 @@ impl Fish {
     }
 
     fn handle_next(&self) -> Result<Ask, NextError> {
-        let asker = *self.curr_player.borrow();
-        let your_index = *self.your_index.borrow();
+        let asker_idx = *self.curr_player.borrow();
         let num_players = *self.num_players.borrow();
-        if your_index == asker {
-            return Err(NextError::YourTurn);
+
+        if !self.players.borrow()[asker_idx].is_bot {
+            return Err(NextError::HumanTurn);
         }
 
         // Randomly ask a user for a card
@@ -290,16 +298,24 @@ impl Fish {
     }
 
     // Helpers
-    fn your_index(&self) -> usize {
-        *self.your_index.borrow()
-    }
-
-    fn your_hand(&self) -> Vec<Card> {
-        self.players.borrow()[self.your_index()].cards.clone()
+    fn get_hand(&self, idx: usize) -> Vec<Card> {
+        self.players.borrow()[idx].cards.clone()
     }
 
     fn curr_player(&self) -> usize {
         *self.curr_player.borrow()
+    }
+
+    fn num_humans(&self) -> usize {
+        *self.num_humans.borrow() as usize
+    }
+
+    fn num_bots(&self) -> usize {
+        self.num_players() - self.num_humans()
+    }
+
+    fn is_bot(&self, idx: usize) -> bool {
+        self.players.borrow()[idx].is_bot
     }
 
     fn num_players(&self) -> usize {
@@ -328,23 +344,25 @@ impl Fish {
     }
 }
 
+#[derive(Parser)]
+struct Args {
+    #[clap(required = false, long, default_value = "0")]
+    num_humans: u8,
+}
+
 fn main() {
-    let game = Fish::init();
+    let args = Args::parse();
+    let game = Fish::init(args.num_humans);
     let g = &game;
 
     let engine = Engine::init(g);
     let e = &engine;
-    e.register_hand(g.your_index(), &g.your_hand());
+    // e.register_hand(0, &g.get_hand(0));
 
     let printer = Printer {
         use_color: Rc::new(RefCell::new(true)),
     };
     let p = &printer;
-
-    println!("Welcome to Fish!");
-    println!("You are {}", p.print_player(g.your_index(), g));
-    println!("It is {}'s turn", p.print_player(g.curr_player(), g));
-    println!("Your cards: {}", &p.print_hand(g.your_index(), g));
 
     // Create the repl
     let mut repl = Repl::builder()
@@ -352,12 +370,22 @@ fn main() {
         .add(
             "i",
             command! { "Info", () => || {
-                    println!("You are {}", p.print_player(g.your_index(), g));
-                    println!("It is {}'s turn", p.print_player(g.curr_player(), g));
-                    println!("Your cards: {}", &p.print_hand(g.your_index(), g));
+                    println!("There are {} bot(s) and {} human(s) in the game.",
+                        g.num_bots(),
+                        g.num_humans()
+                    );
+
+                    println!("It is {}'s turn", 
+                        p.print_player(g.curr_player(), g), 
+                    );
+
                     for i in 0..g.num_players() {
-                        println!("{}: {}", p.print_player(i, g), p.print_hand(i, g));
+                        println!("{} [{}]: {}", 
+                            p.print_player(i, g),
+                            if g.is_bot(i) { "Bot" } else { "Player" },
+                            p.print_hand(i, g));
                     }
+
                     Ok(CommandStatus::Done)
                 }
             },
@@ -365,7 +393,7 @@ fn main() {
         .add(
             "a",
             command! {
-                "Ask a player for a card (a 1 QD)", (askee: usize, card: Card) => move |askee, card| {
+                "Ask a player for a card", (askee: usize, card: Card) => move |askee, card| {
                     match g.handle_ask(askee, &card) {
                         Ok(ask @ Ask { askee, outcome, .. }) => {
                             // Printer
@@ -382,8 +410,8 @@ fn main() {
                             // Engine
                             e.update_constraints(Event::Ask(ask));
                         },
-                        Err(AskError::NotYourTurn) => {
-                            println!("Error: It's not your turn!");
+                        Err(AskError::BotTurn) => {
+                            println!("Error: It is a bot's turn!");
                         },
                         Err(AskError::SameTeam) => {
                             println!("Error: You cannot ask someone on your team!");
@@ -426,7 +454,7 @@ fn main() {
                             // Engine
                             e.update_constraints(Event::Ask(ask));
                         },
-                        Err(NextError::YourTurn) => println!("Error: It's your turn!"),
+                        Err(NextError::HumanTurn) => println!("Error: It's a human's turn!"),
                     }
                     g.check_game_end();
                     Ok(CommandStatus::Done)
