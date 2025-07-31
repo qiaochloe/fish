@@ -216,7 +216,7 @@ impl std::fmt::Display for Card {
 impl std::str::FromStr for Suit {
     type Err = ParseSuitError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
+        match s.to_uppercase().as_str() {
             "D" => Ok(Suit::Diamonds),
             "C" => Ok(Suit::Clubs),
             "H" => Ok(Suit::Hearts),
@@ -238,7 +238,7 @@ impl std::str::FromStr for Rank {
         }
 
         // Try to parse JQKA
-        match s {
+        match s.to_uppercase().as_str() {
             "J" => Ok(Rank::Jack),
             "Q" => Ok(Rank::Queen),
             "K" => Ok(Rank::King),
@@ -253,7 +253,7 @@ impl std::str::FromStr for DisplayCard {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Check for jokers
-        match s {
+        match s.to_uppercase().as_str() {
             "BJ" => return Ok(DisplayCard::Joker { big: true }),
             "SJ" => return Ok(DisplayCard::Joker { big: false }),
             _ => {}
@@ -282,16 +282,16 @@ impl std::str::FromStr for Card {
 impl std::str::FromStr for Book {
     type Err = ParseBookError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "LowDiamonds" | "ld" => Ok(Book::LowDiamonds),
-            "HighDiamonds" | "hd" => Ok(Book::HighDiamonds),
-            "LowClubs" | "lc" => Ok(Book::LowClubs),
-            "HighClubs" | "hc" => Ok(Book::HighClubs),
-            "LowHearts" | "lh" => Ok(Book::LowHearts),
-            "HighHearts" | "hh" => Ok(Book::HighHearts),
-            "LowSpades" | "ls" => Ok(Book::LowSpades),
-            "HighSpades" | "hs" => Ok(Book::HighSpades),
-            "Eights" | "e" => Ok(Book::Eights),
+        match s.to_uppercase().as_str() {
+            "LOWDIAMONDS" | "LD" => Ok(Book::LowDiamonds),
+            "HighDiamonds" | "HD" => Ok(Book::HighDiamonds),
+            "LOWCLUBS" | "LC" => Ok(Book::LowClubs),
+            "HIGHCLUBS" | "HC" => Ok(Book::HighClubs),
+            "LOWHEARTS" | "LH" => Ok(Book::LowHearts),
+            "HIGHHEARTS" | "HH" => Ok(Book::HighHearts),
+            "LOWSPADES" | "LS" => Ok(Book::LowSpades),
+            "HIGHSPADES" | "HS" => Ok(Book::HighSpades),
+            "EIGHTS" | "E" => Ok(Book::Eights),
             _ => Err(ParseBookError),
         }
     }
