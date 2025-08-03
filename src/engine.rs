@@ -1,5 +1,6 @@
 use crate::card::{Book, Card};
-use crate::{Ask, AskOutcome, Declare, Event, Fish};
+use crate::printer::PrettyDisplay;
+use crate::{Ask, AskOutcome, Declare, Event, Fish, Player};
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::rc::Rc;
@@ -15,7 +16,7 @@ impl ToBits for u64 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Slot {
     possible: u64,
     owner: usize,
@@ -116,14 +117,15 @@ impl Engine {
             Event::Declare(Declare {
                 book, actual_cards, ..
             }) => {
+                let mut slots = self.slots.borrow_mut();
                 for (player, cards) in actual_cards.iter() {
                     for card in cards {
                         // TODO: is there a more efficient way to do this
-                        let idx = self.find_card(*player, *card).unwrap();
-                        self.slots.borrow_mut().remove(idx);
+                        let idx = self.find_card(&slots, *player, *card).unwrap();
+                        slots.remove(idx);
                     }
                 }
-                for slot in self.slots.borrow_mut().iter_mut() {
+                for slot in slots.iter_mut() {
                     if slot.possible & book.mask() != 0 {
                         slot.dirty = true;
                         slot.possible &= !book.mask();
@@ -136,7 +138,7 @@ impl Engine {
 
     /// Player owns book. Update a Slot if player does not already
     /// have a card of that book.
-    pub fn has_book(&self, player: usize, book: Book) {
+    fn has_book(&self, player: usize, book: Book) {
         let mut slots = self.slots.borrow_mut();
 
         for slot in slots.iter_mut() {
@@ -156,8 +158,7 @@ impl Engine {
         panic!("No slot available to add book constraint");
     }
 
-    pub fn find_card(&self, player: usize, card: Card) -> Option<usize> {
-        let slots = self.slots.borrow();
+    fn find_card(&self, slots: &Vec<Slot>, player: usize, card: Card) -> Option<usize> {
         slots
             .iter()
             .position(|slot| slot.owner == player && slot.possible == card.mask())
@@ -172,9 +173,9 @@ impl Engine {
     }
 
     /// Change the owner of the most constrained slot.
-    pub fn move_card(&self, from: usize, to: usize, card: Card) {
-        let idx = self.find_card(from, card).unwrap();
+    fn move_card(&self, from: usize, to: usize, card: Card) {
         let mut slots = self.slots.borrow_mut();
+        let idx = self.find_card(&slots, from, card).unwrap();
         let slot = &mut slots[idx];
         slot.owner = to;
         slot.possible = card.mask();
@@ -182,7 +183,7 @@ impl Engine {
     }
 
     /// Player does not own the card
-    pub fn not_own_card(&self, player: usize, card: Card) {
+    fn not_own_card(&self, player: usize, card: Card) {
         self.slots
             .borrow_mut()
             .iter_mut()
@@ -210,7 +211,7 @@ impl Engine {
             .collect()
     }
 
-    pub fn prune(&self) {
+    fn prune(&self) {
         let mut slots = self.slots.borrow_mut();
         while let Some(check_slot) = slots.iter_mut().find(|slot| slot.dirty) {
             check_slot.dirty = false;
@@ -228,7 +229,23 @@ impl Engine {
         }
     }
 
-    pub fn num_cards(&self) -> usize {
+    fn num_cards(&self) -> usize {
         *self.num_cards.borrow()
+    }
+
+    pub fn assert_sanity(&self, players: &Vec<Player>) {
+        let mut slots = self.slots.borrow().clone();
+        for player in players {
+            for card in player.cards.iter() {
+                let idx = self
+                    .find_card(&slots, player.idx, *card)
+                    .unwrap_or_else(|| {
+                        panic!("No valid slot for card {}", card.to_pretty_string())
+                    });
+                slots.remove(idx);
+            }
+        }
+        assert_eq!(slots.len(), 0, "Too many slots");
+        println!("Constraints are valid!");
     }
 }

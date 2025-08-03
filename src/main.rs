@@ -409,6 +409,7 @@ fn main() {
 
                             // Engine
                             e.update_constraints(Event::Ask(ask));
+                            e.assert_sanity(&g.players.borrow());
                         },
                         Err(AskError::BotTurn) => {
                             println!("Error: It is a bot's turn!");
@@ -453,6 +454,7 @@ fn main() {
 
                             // Engine
                             e.update_constraints(Event::Ask(ask));
+                            e.assert_sanity(&g.players.borrow());
                         },
                         Err(NextError::HumanTurn) => println!("Error: It's a human's turn!"),
                     }
@@ -478,6 +480,7 @@ fn main() {
 
                     // Engine
                     e.update_constraints(Event::Declare(declare));
+                    e.assert_sanity(&g.players.borrow());
                     g.check_game_end();
                     Ok(CommandStatus::Done)
                 }
