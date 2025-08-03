@@ -1,5 +1,5 @@
 use crate::card::{Card, DisplayCard, Suit};
-use crate::engine::{Constraint, Engine, Slot};
+use crate::engine::Engine;
 use crate::{Fish, Player};
 use colored::Colorize;
 use std::cell::RefCell;
@@ -39,14 +39,33 @@ impl Printer {
 
     pub fn print_constraints(&self, e: &Engine, g: &Fish) -> String {
         let mut output = String::new();
-        let map = e.prune();
-        for (player, hand) in map.iter() {
-            writeln!(output, "{}", self.print_player(*player, g)).unwrap();
-            for (i, slot) in hand.iter().enumerate() {
-                writeln!(&mut output, "Slot {i}: {}", self.to_pretty_string(slot)).unwrap();
-            }
+        for (player, bits) in e.to_matrix().iter() {
+            let bits_str: String = bits
+                .iter()
+                .enumerate()
+                .map(|(i, b)| {
+                    if *b {
+                        (Card { num: i as u8 })
+                            .display_card()
+                            .to_short_string()
+                    } else {
+                        ".".to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .chunks(6)
+                .map(|chunk| chunk.join(""))
+                .collect::<Vec<String>>()
+                .join("|");
+            writeln!(
+                &mut output,
+                "[{}] {}",
+                self.print_player(*player, g),
+                bits_str
+            )
+            .unwrap();
         }
-        output.to_string()
+        output
     }
 }
 
@@ -89,16 +108,6 @@ impl PrettyDisplay for Player {
             format!("{}", format!("Player {}", self.idx).blue())
         } else {
             format!("{}", format!("Player {}", self.idx).red())
-        }
-    }
-}
-
-impl PrettyDisplay for Slot {
-    fn to_pretty_string(&self) -> String {
-        match self {
-            Some(Constraint::IsCard(card)) => card.to_pretty_string(),
-            Some(Constraint::InBook(book)) => book.to_pretty_string(),
-            None => "None".to_string(),
         }
     }
 }

@@ -357,7 +357,7 @@ fn main() {
 
     let engine = Engine::init(g);
     let e = &engine;
-    // e.register_hand(0, &g.get_hand(0));
+    e.register_hand(0, &g.get_hand(0));
 
     let printer = Printer {
         use_color: Rc::new(RefCell::new(true)),

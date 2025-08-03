@@ -113,7 +113,7 @@ impl Card {
 }
 
 impl DisplayCard {
-    fn card(&self) -> Card {
+    pub fn card(&self) -> Card {
         let num = match self {
             DisplayCard::Joker { big } => {
                 if *big {
@@ -150,6 +150,18 @@ impl DisplayCard {
             }
         };
         Card { num }
+    }
+
+    pub fn to_short_string(&self) -> String {
+         match self {
+            DisplayCard::Joker { big } => { if *big { "B".to_string() } else { "S".to_string() }}
+            DisplayCard::Standard { suit: _, rank } => { 
+                match rank {
+                    Rank::Num(10) => "T".to_string(),
+                    _ => rank.to_string()
+                }
+            }
+        }
     }
 }
 
