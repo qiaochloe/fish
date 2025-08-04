@@ -1,4 +1,5 @@
 use anyhow::Result;
+use strum_macros::EnumIter;
 
 #[derive(Eq, PartialEq)]
 pub enum Suit {
@@ -27,7 +28,7 @@ pub struct Card {
     pub num: u8,
 }
 
-#[derive(Clone, Hash, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Hash, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter)]
 pub enum Book {
     LowDiamonds,  // 2-7
     HighDiamonds, // 9-A

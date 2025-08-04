@@ -16,7 +16,7 @@ mod card;
 use crate::card::{Book, Card};
 
 mod engine;
-use crate::engine::Engine;
+use crate::engine::{Engine, EventRequest};
 
 mod printer;
 use crate::printer::{PrettyDisplay, Printer};
@@ -42,9 +42,10 @@ struct Player {
     idx: usize,
     cards: Vec<Card>,
     is_bot: bool,
+    engine: Option<Engine>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Ask {
     asker: usize,
     askee: usize,
@@ -72,20 +73,21 @@ enum NextError {
     HumanTurn,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Event {
     Ask(Ask),
     Declare(Declare),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Declare {
+    declarer: usize,
     book: Book,
     actual_cards: HashMap<usize, HashSet<Card>>,
     outcome: DeclareOutcome,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 enum DeclareOutcome {
     Success,
     Failure,
@@ -138,7 +140,7 @@ impl Fish {
         for idx in 0..num_players {
             let cards = deck.drain(0..num_cards / num_players).collect();
             let is_bot = bot_idxs.contains(&idx);
-            players.push(Player { idx, cards, is_bot })
+            players.push(Player { idx, cards, is_bot, engine: None });
         }
 
         Fish {
@@ -218,24 +220,75 @@ impl Fish {
         })
     }
 
-    fn handle_next(&self) -> Result<Ask, NextError> {
+    fn handle_next(&self) -> Result<Event, NextError> {
         let asker_idx = *self.curr_player.borrow();
         let num_players = *self.num_players.borrow();
+        let mut players = self.players.borrow_mut();
 
-        if !self.players.borrow()[asker_idx].is_bot {
+        if !players[asker_idx].is_bot {
             return Err(NextError::HumanTurn);
         }
 
-        // Randomly ask a user for a card
-        loop {
-            let rand_user = rand::rng().random_range(0..num_players);
-            let rand_card = Card {
-                num: rand::rng().random_range(0..54),
-            };
-            match self.ask(rand_user, &rand_card) {
-                Ok(ask) => return Ok(ask),
-                Err(_) => continue,
+        for declarer_idx in (0..num_players).filter(|&p| players[p].is_bot) {
+            if let EventRequest::Declare { book, guessed_cards } = players[declarer_idx].engine.as_ref().unwrap().request.clone() {
+                let mut good_declaration: bool = true;
+                let mut actual_cards = HashMap::new();
+
+                for (i, player) in players.iter_mut().enumerate() {
+                    // Remove all cards of that book from the player
+                    let mut removed_cards = HashSet::new();
+                    player.cards.retain(|card| {
+                        if card.book() == book {
+                            removed_cards.insert(*card);
+                            false
+                        } else {
+                            true
+                        }
+                    });
+
+                    // Check teammates
+                    if i % 2 == declarer_idx % 2 {
+                        let guessed_cards = &guessed_cards[&i];
+                        if removed_cards != *guessed_cards {
+                            good_declaration = false;
+                        }
+                    }
+
+                    actual_cards.insert(i, removed_cards);
+                }
+
+                let mut teams = self.teams.borrow_mut();
+
+                if good_declaration {
+                    teams[declarer_idx % 2].books.push(book);
+                    return Ok(Event::Declare(Declare {
+                        declarer: declarer_idx,
+                        book,
+                        actual_cards,
+                        outcome: DeclareOutcome::Success,
+                    }));
+                }
+
+                teams[(declarer_idx + 1) % 2].books.push(book);
+                return Ok(Event::Declare(Declare {
+                        declarer: declarer_idx,
+                        book,
+                        actual_cards,
+                        outcome: DeclareOutcome::Failure,
+                    }));
             }
+        }
+
+        match &players[asker_idx].engine.as_ref().unwrap().request.clone() {
+            EventRequest::Ask { askee, card } => {
+                drop(players);
+                match self.ask(*askee, &card) {
+                    Ok(ask) => return Ok(Event::Ask(ask)),
+                    Err(_) => panic!("Something went wrong!"),
+                }
+            }
+            EventRequest::Declare { .. } => unreachable!(),
+            EventRequest::None => panic!("Something went wrong!")
         }
     }
 
@@ -273,6 +326,7 @@ impl Fish {
         if good_declaration {
             teams[declarer_idx % 2].books.push(book);
             return Declare {
+                declarer: declarer_idx,
                 book,
                 actual_cards,
                 outcome: DeclareOutcome::Success,
@@ -281,6 +335,7 @@ impl Fish {
 
         teams[(declarer_idx + 1) % 2].books.push(book);
         Declare {
+            declarer: declarer_idx,
             book,
             actual_cards,
             outcome: DeclareOutcome::Failure,
@@ -298,10 +353,6 @@ impl Fish {
     }
 
     // Helpers
-    fn get_hand(&self, idx: usize) -> Vec<Card> {
-        self.players.borrow()[idx].cards.clone()
-    }
-
     fn curr_player(&self) -> usize {
         *self.curr_player.borrow()
     }
@@ -354,11 +405,13 @@ fn main() {
     let args = Args::parse();
     let game = Fish::init(args.num_humans);
     let g = &game;
-
-    let engine = Engine::init(g);
-    let e = &engine;
-    e.register_hand(0, &g.get_hand(0));
-
+    g.players.borrow_mut().iter_mut().for_each(|p| {
+        if p.is_bot {
+            p.engine = Some(Engine::init(g.num_players(), g.num_cards(), p.idx, &p.cards));
+            p.engine.as_mut().unwrap().update_request();
+        }
+    });
+    
     let printer = Printer {
         use_color: Rc::new(RefCell::new(true)),
     };
@@ -407,9 +460,14 @@ fn main() {
                                 }
                             }
 
-                            // Engine
-                            e.update_constraints(Event::Ask(ask));
-                            e.assert_sanity(&g.players.borrow());
+                            // Engines
+                            let players = g.players.borrow().iter().map(|p| (p.idx, p.cards.clone())).collect();
+                            g.players.borrow_mut().iter_mut().for_each(|p| {
+                                if p.is_bot {
+                                    p.engine.as_mut().unwrap().update(Event::Ask(ask.clone()));
+                                    p.engine.as_ref().unwrap().assert_sanity(&players);
+                                }
+                            });
                         },
                         Err(AskError::BotTurn) => {
                             println!("Error: It is a bot's turn!");
@@ -432,33 +490,66 @@ fn main() {
                 }
             },
         )
-        .add("c", command ! {
-            "Constraints", () => || {
-                println!("{}", p.print_constraints(e, g));
+        .add("c", command! {
+            "Constraints", (player: usize) => move |player| {
+                println!("{}", p.print_constraints(player, g));
                 Ok(CommandStatus::Done)
             }
         })
         .add(
             "n",
             command! { "Next",
-                () => || {
-                    match g.handle_next() {
-                        Ok(ask @ Ask { asker, askee, card, outcome }) => {
-                            // Printer
-                            let response = match outcome { AskOutcome::Success => "YES", AskOutcome::Failure => "NO" };
-                            println!("{} asked {} for {} and received {response}.",
-                                p.print_player(asker, g),
-                                p.print_player(askee, g),
-                                p.to_pretty_string(&card),
-                            );
+                (iterations: usize) => move |iterations| {
+                    let mut i = 0;
+                    while i < iterations {
+                        match g.handle_next() {
+                            Ok(ask @ Event::Ask(Ask { asker, askee, card, outcome })) => {
+                                // Printer
+                                let response = match outcome { AskOutcome::Success => "YES", AskOutcome::Failure => "NO" };
+                                println!("{} asked {} for {} and received {response}.",
+                                    p.print_player(asker, g),
+                                    p.print_player(askee, g),
+                                    p.to_pretty_string(&card),
+                                );
 
-                            // Engine
-                            e.update_constraints(Event::Ask(ask));
-                            e.assert_sanity(&g.players.borrow());
-                        },
-                        Err(NextError::HumanTurn) => println!("Error: It's a human's turn!"),
+                                // Engines
+                                let players = g.players.borrow().iter().map(|p| (p.idx, p.cards.clone())).collect();
+                                g.players.borrow_mut().iter_mut().for_each(|p| {
+                                if p.is_bot {
+                                    p.engine.as_mut().unwrap().update(ask.clone());
+                                    p.engine.as_ref().unwrap().assert_sanity(&players);
+                                }
+                            });
+                            },
+                            Ok(declare @ Event::Declare(Declare { declarer, book, outcome, .. })) => {
+                                // Printer
+                                let response = match outcome { DeclareOutcome::Success => "YES", DeclareOutcome::Failure => "NO" };
+                                println!("{} declared {} and received {response}.",
+                                    p.print_player(declarer, g),
+                                    book.to_pretty_string(),
+                                );
+                                // Engines
+                                let players = g.players.borrow().iter().map(|p| (p.idx, p.cards.clone())).collect();
+                                g.players.borrow_mut().iter_mut().for_each(|p| {
+                                if p.is_bot {
+                                    p.engine.as_mut().unwrap().update(declare.clone());
+                                    p.engine.as_ref().unwrap().assert_sanity(&players);
+                                }
+                            });
+                            }
+                            Err(NextError::HumanTurn) => {
+                                if i > 0 {
+                                    break;
+                                }
+                                println!("Error: It's a human's turn!");
+                            }
+                        }
+                        g.check_game_end();
+                        i += 1;
                     }
-                    g.check_game_end();
+                    if i > 1 {
+                        println!("{} iterations completed", i);
+                    }
                     Ok(CommandStatus::Done)
                 }
             },
@@ -478,9 +569,14 @@ fn main() {
                         }
                     }
 
-                    // Engine
-                    e.update_constraints(Event::Declare(declare));
-                    e.assert_sanity(&g.players.borrow());
+                    // Engines
+                    let players = g.players.borrow().iter().map(|p| (p.idx, p.cards.clone())).collect();
+                    g.players.borrow_mut().iter_mut().for_each(|p| {
+                        if p.is_bot {
+                            p.engine.as_mut().unwrap().update(Event::Declare(declare.clone()));
+                            p.engine.as_ref().unwrap().assert_sanity(&players);
+                        }
+                    });
                     g.check_game_end();
                     Ok(CommandStatus::Done)
                 }
@@ -491,7 +587,6 @@ fn main() {
             command! {
                 "Reset the game", () => || {
                     g.reset();
-                    e.reset(g);
                     Ok(CommandStatus::Done)
                 }
             },

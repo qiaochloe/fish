@@ -1,5 +1,4 @@
 use crate::card::{Card, DisplayCard, Suit};
-use crate::engine::Engine;
 use crate::{Fish, Player};
 use colored::Colorize;
 use std::cell::RefCell;
@@ -37,7 +36,9 @@ impl Printer {
         self.to_pretty_string(&players[player])
     }
 
-    pub fn print_constraints(&self, e: &Engine, g: &Fish) -> String {
+    pub fn print_constraints(&self, player: usize, g: &Fish) -> String {
+        let players = g.players.borrow();
+        let e = players.get(player).unwrap().engine.as_ref().unwrap();
         let mut output = String::new();
         for (player, bits) in e.to_matrix().iter() {
             let bits_str: String = bits
@@ -45,9 +46,7 @@ impl Printer {
                 .enumerate()
                 .map(|(i, b)| {
                     if *b {
-                        (Card { num: i as u8 })
-                            .display_card()
-                            .to_short_string()
+                        (Card { num: i as u8 }).display_card().to_short_string()
                     } else {
                         ".".to_string()
                     }
