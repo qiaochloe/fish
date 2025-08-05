@@ -1,19 +1,19 @@
 use crate::card::{Book, Card};
-use crate::printer::PrettyDisplay;
-use crate::{Ask, AskOutcome, Declare, Event};
+// use crate::printer::PrettyDisplay;
+use crate::{Ask, AskOutcome, Declare, Event, NUM_CARDS, NUM_PLAYERS, NUM_TEAMS};
 use num_rational::Ratio;
+use std::array::from_fn;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::vec::Vec;
 use strum::IntoEnumIterator;
 
 trait ToBits {
-    fn to_bits(self) -> Vec<bool>;
+    fn to_bits(self) -> [bool; NUM_CARDS];
 }
 
 impl ToBits for u64 {
-    fn to_bits(self) -> Vec<bool> {
-        (0..64).map(|i| (self & 1 << i) != 0).collect()
+    fn to_bits(self) -> [bool; NUM_CARDS] {
+        from_fn(|i| (self & (1 << i)) != 0)
     }
 }
 
@@ -26,8 +26,6 @@ struct Slot {
 
 #[derive(Debug)]
 pub struct Engine {
-    num_players: usize,
-    num_cards: usize,
     player_idx: usize,
     slots: Vec<Slot>,
     pub request: EventRequest,
@@ -61,36 +59,32 @@ impl Book {
 }
 
 impl Engine {
-    pub fn init(num_players: usize, num_cards: usize, player: usize, cards: &[Card]) -> Self {
+    pub fn init(player: usize, cards: &[Card]) -> Self {
         let default_mask = cards
             .iter()
-            .fold((1 << num_cards) - 1, |acc, card| acc ^ card.mask());
+            .fold((1 << NUM_CARDS) - 1, |acc, card| acc ^ card.mask());
         let mut cards = cards.iter();
-        let slots = (0..num_cards)
-            .map(|i| {
-                let owner = i / (num_cards / num_players);
-                Slot {
-                    possible: if owner == player {
-                        cards.next().unwrap().mask()
-                    } else {
-                        default_mask
-                    },
-                    owner,
-                    dirty: false,
-                }
-            })
-            .collect();
+        let slots = (0..NUM_CARDS).map(|i| {
+            let owner = i / (NUM_CARDS / NUM_PLAYERS);
+            Slot {
+                possible: if owner == player {
+                    cards.next().unwrap().mask()
+                } else {
+                    default_mask
+                },
+                owner,
+                dirty: false,
+            }
+        }).collect();
 
         Engine {
-            num_players,
-            num_cards,
             player_idx: player,
             slots,
             request: EventRequest::None,
         }
     }
 
-    pub fn update(&mut self, event: Event) {
+    pub fn update(&mut self, event: &Event) {
         match event {
             Event::Ask(Ask {
                 asker,
@@ -99,8 +93,8 @@ impl Engine {
                 outcome: AskOutcome::Success,
             }) => {
                 // Asker has 1 card of the book
-                self.has_book(asker, card.book());
-                self.move_card(askee, asker, card);
+                self.has_book(*asker, card.book());
+                self.move_card(*askee, *asker, *card);
             }
             Event::Ask(Ask {
                 asker,
@@ -110,9 +104,9 @@ impl Engine {
             }) => {
                 // Asker has 1 card of the book
                 // Askee does not have the card
-                self.has_book(asker, card.book());
-                self.not_own_card(asker, card);
-                self.not_own_card(askee, card);
+                self.has_book(*asker, card.book());
+                self.not_own_card(*asker, *card);
+                self.not_own_card(*askee, *card);
             }
             Event::Declare(Declare {
                 book, actual_cards, ..
@@ -121,7 +115,9 @@ impl Engine {
                     for card in cards {
                         // TODO: is there a more efficient way to do this
                         let idx = self.find_card(&self.slots, *player, *card).unwrap();
-                        self.slots.remove(idx);
+                        self.slots[idx].possible = 0;
+                        // TODO: will this ever be true?
+                        self.slots[idx].dirty = false;
                     }
                 }
                 for slot in self.slots.iter_mut() {
@@ -142,17 +138,20 @@ impl Engine {
         let team = self
             .slots
             .iter()
-            .filter(|slot| slot.owner % 2 == self.player_idx % 2 && slot.possible.count_ones() == 1)
+            .filter(|slot| {
+                slot.owner % NUM_TEAMS == self.player_idx % NUM_TEAMS
+                    && slot.possible.count_ones() == 1
+            })
             .fold(0, |acc, slot| acc | slot.possible);
         for book in Book::iter() {
             if team & book.mask() == book.mask() {
                 let mut guessed_cards = HashMap::<usize, HashSet<Card>>::from_iter(
-                    (self.player_idx % 2..self.num_players)
-                        .step_by(2)
+                    (self.player_idx % NUM_TEAMS..NUM_PLAYERS)
+                        .step_by(NUM_TEAMS)
                         .map(|p| (p, HashSet::new())),
                 );
                 for slot in self.slots.iter() {
-                    if slot.owner % 2 == self.player_idx % 2 && slot.possible & book.mask() != 0 {
+                    if slot.owner % NUM_TEAMS == self.player_idx % NUM_TEAMS && slot.possible & book.mask() != 0 {
                         guessed_cards.get_mut(&slot.owner).unwrap().insert(Card {
                             num: slot.possible.trailing_zeros() as u8,
                         });
@@ -172,7 +171,7 @@ impl Engine {
             .iter()
             .filter(|slot| slot.owner == self.player_idx)
             .fold(0, |acc, slot| acc | slot.possible);
-        let mut counts = vec![vec![0u8; self.num_cards]; self.num_players];
+        let mut counts = [[0u8; NUM_CARDS]; NUM_PLAYERS];
         self.slots.iter().for_each(|slot| {
             counts[slot.owner]
                 .iter_mut()
@@ -185,18 +184,18 @@ impl Engine {
         });
 
         // Highest proportion
-        let denominator: Vec<u8> = (0..self.num_cards)
-            .map(|col| counts.iter().map(|row| row[col]).sum())
-            .collect();
+        let denominator: [u8; NUM_CARDS] = from_fn(|col| counts.iter().map(|row| row[col]).sum());
         self.request = EventRequest::None;
         let mut best_chance = None;
-        for num in 0..self.num_cards {
+        for num in 0..NUM_CARDS {
             if owned & 1 << num != 0 || owned & (Card { num: num as u8 }).book().mask() == 0 {
                 continue;
             }
-            for player in ((self.player_idx % 2) ^ 1..self.num_players).step_by(2) {
+            for player in ((self.player_idx % 2) ^ 1..NUM_PLAYERS).step_by(2) {
                 let chance = Ratio::new(counts[player][num], denominator[num]);
-                if best_chance.map_or(true, |best| chance > best || chance == best && rand::random_bool(1.0 / 2.0)) {
+                if best_chance.map_or(true, |best| {
+                    chance > best || chance == best && rand::random_bool(1.0 / 2.0)
+                }) {
                     self.request = EventRequest::Ask {
                         askee: player,
                         card: Card { num: num as u8 },
@@ -264,22 +263,6 @@ impl Engine {
             });
     }
 
-    pub fn to_matrix(&self) -> Vec<(usize, Vec<bool>)> {
-        let mut data: Vec<(usize, Vec<bool>, u32, u64)> = self
-            .slots
-            .iter()
-            .map(|slot| {
-                let mut bits = slot.possible.to_bits();
-                bits.truncate(self.num_cards);
-                (slot.owner, bits, slot.possible.count_ones(), slot.possible)
-            })
-            .collect();
-        data.sort_by_key(|(owner, _, ones, possible)| (*owner, *ones, *possible));
-        data.into_iter()
-            .map(|(owner, bits, _, _)| (owner, bits))
-            .collect()
-    }
-
     fn prune(&mut self) {
         while let Some(check_slot) = self.slots.iter_mut().find(|slot| slot.dirty) {
             check_slot.dirty = false;
@@ -299,18 +282,5 @@ impl Engine {
                 }
             }
         }
-    }
-
-    pub fn assert_sanity(&self, players: &Vec<(usize, Vec<Card>)>) {
-        let mut slots = self.slots.clone();
-        for (idx, cards) in players {
-            for card in cards.iter() {
-                let idx = self.find_card(&slots, *idx, *card).unwrap_or_else(|| {
-                    panic!("No valid slot for card {}", card.to_pretty_string())
-                });
-                slots.remove(idx);
-            }
-        }
-        assert_eq!(slots.len(), 0, "Too many slots");
     }
 }
