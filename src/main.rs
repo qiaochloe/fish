@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::vec::Vec;
 
 mod card;
-use crate::card::{Book, Card};
+use crate::card::{Book, RawCard};
 
 mod engine;
 use crate::engine::{Engine, EventRequest};
@@ -48,7 +48,7 @@ enum PlayerType {
 #[derive(Debug)]
 struct Player {
     idx: usize,
-    cards: Vec<Card>,
+    cards: Vec<RawCard>,
     player_type: PlayerType
 }
 
@@ -80,7 +80,7 @@ impl Player {
 struct Ask {
     asker: usize,
     askee: usize,
-    card: Card,
+    card: RawCard,
     outcome: AskOutcome,
 }
 
@@ -116,7 +116,7 @@ enum Event {
 struct Declare {
     declarer: usize,
     book: Book,
-    actual_cards: HashMap<usize, HashSet<Card>>,
+    actual_cards: HashMap<usize, HashSet<RawCard>>,
     outcome: DeclareOutcome,
 }
 
@@ -155,7 +155,7 @@ impl Fish {
         // Instantiate deck and shuffle
         let mut deck = Vec::new();
         for num in 0..num_cards {
-            deck.push(Card { num: num as u8 })
+            deck.push(RawCard { num: num as u8 })
         }
         let mut rng = rng();
         deck.shuffle(&mut rng);
@@ -175,7 +175,7 @@ impl Fish {
 
         let mut players = vec![];
         for idx in 0..num_players {
-            let cards = deck.drain(0..num_cards / num_players).collect::<Vec<Card>>();
+            let cards = deck.drain(0..num_cards / num_players).collect::<Vec<RawCard>>();
 
             let mut player_type = PlayerType::Human;
             if bot_idxs.contains(&idx) {
@@ -209,7 +209,7 @@ impl Fish {
         self.game_over.replace(false);
     }
 
-    fn handle_ask(&self, askee_idx: usize, card: &Card) -> Result<Ask, AskError> {
+    fn handle_ask(&self, askee_idx: usize, card: &RawCard) -> Result<Ask, AskError> {
         if *self.game_over.borrow() { return Err(AskError::GameOver); }
 
         let asker_idx = *self.curr_player.borrow();
@@ -219,7 +219,7 @@ impl Fish {
         self.ask(askee_idx, card)
     }
 
-    fn ask(&self, askee_idx: usize, card: &Card) -> Result<Ask, AskError> {
+    fn ask(&self, askee_idx: usize, card: &RawCard) -> Result<Ask, AskError> {
         // 1. The player must ask a player from the opposing team
         // 2. The player must hold a card that is part of the requested book
         // 3. The player may not ask for a card they already hold
@@ -369,7 +369,7 @@ impl Fish {
             // Check teammates
             if i % 2 == declarer_idx % 2 {
                 println!("Player {i} has: ");
-                let guessed_cards: HashSet<Card> = Fish::get_cards().into_iter().collect();
+                let guessed_cards: HashSet<RawCard> = Fish::get_cards().into_iter().collect();
                 if removed_cards != guessed_cards {
                     good_declaration = false;
                 }
@@ -434,13 +434,13 @@ impl Fish {
         *self.num_cards.borrow()
     }
 
-    fn get_cards() -> Vec<Card> {
+    fn get_cards() -> Vec<RawCard> {
         io::stdout().flush().unwrap();
         let mut input = String::new();
         io::stdin().read_line(&mut input).unwrap();
         match input
             .split_whitespace()
-            .map(|s| s.parse::<Card>())
+            .map(|s| s.parse::<RawCard>())
             .collect()
         {
             Ok(cards) => cards,
@@ -495,7 +495,7 @@ fn main() {
         .add(
             "a",
             command! {
-                "Ask a player for a card", (askee: usize, card: Card) => move |askee, card| {
+                "Ask a player for a card", (askee: usize, card: RawCard) => move |askee, card| {
                     match g.handle_ask(askee, &card) {
                         Ok(ask @ Ask { askee, outcome, .. }) => {
                             // Printer

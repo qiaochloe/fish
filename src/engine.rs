@@ -1,4 +1,4 @@
-use crate::card::{Book, Card};
+use crate::card::{Book, RawCard};
 use crate::printer::PrettyDisplay;
 use crate::{Ask, AskOutcome, Declare, Event};
 use num_rational::Ratio;
@@ -37,16 +37,16 @@ pub struct Engine {
 pub enum EventRequest {
     Ask {
         askee: usize,
-        card: Card,
+        card: RawCard,
     },
     Declare {
         book: Book,
-        guessed_cards: HashMap<usize, HashSet<Card>>,
+        guessed_cards: HashMap<usize, HashSet<RawCard>>,
     },
     None,
 }
 
-impl Card {
+impl RawCard {
     fn mask(&self) -> u64 {
         1 << self.num
     }
@@ -61,7 +61,7 @@ impl Book {
 }
 
 impl Engine {
-    pub fn init(num_players: usize, num_cards: usize, player: usize, cards: &[Card]) -> Self {
+    pub fn init(num_players: usize, num_cards: usize, player: usize, cards: &[RawCard]) -> Self {
         let default_mask = cards
             .iter()
             .fold((1 << num_cards) - 1, |acc, card| acc ^ card.mask());
@@ -146,14 +146,14 @@ impl Engine {
             .fold(0, |acc, slot| acc | slot.possible);
         for book in Book::iter() {
             if team & book.mask() == book.mask() {
-                let mut guessed_cards = HashMap::<usize, HashSet<Card>>::from_iter(
+                let mut guessed_cards = HashMap::<usize, HashSet<RawCard>>::from_iter(
                     (self.player_idx % 2..self.num_players)
                         .step_by(2)
                         .map(|p| (p, HashSet::new())),
                 );
                 for slot in self.slots.iter() {
                     if slot.owner % 2 == self.player_idx % 2 && slot.possible & book.mask() != 0 {
-                        guessed_cards.get_mut(&slot.owner).unwrap().insert(Card {
+                        guessed_cards.get_mut(&slot.owner).unwrap().insert(RawCard {
                             num: slot.possible.trailing_zeros() as u8,
                         });
                     }
@@ -191,7 +191,7 @@ impl Engine {
         self.request = EventRequest::None;
         let mut best_chance = None;
         for num in 0..self.num_cards {
-            if owned & 1 << num != 0 || owned & (Card { num: num as u8 }).book().mask() == 0 {
+            if owned & 1 << num != 0 || owned & (RawCard { num: num as u8 }).book().mask() == 0 {
                 continue;
             }
             for player in ((self.player_idx % 2) ^ 1..self.num_players).step_by(2) {
@@ -199,7 +199,7 @@ impl Engine {
                 if best_chance.map_or(true, |best| chance > best) {
                     self.request = EventRequest::Ask {
                         askee: player,
-                        card: Card { num: num as u8 },
+                        card: RawCard { num: num as u8 },
                     };
                     best_chance = Some(chance);
                     if chance == 1.into() {
@@ -230,7 +230,7 @@ impl Engine {
         panic!("No slot available to add book constraint");
     }
 
-    fn find_card(&self, slots: &Vec<Slot>, player: usize, card: Card) -> Option<usize> {
+    fn find_card(&self, slots: &Vec<Slot>, player: usize, card: RawCard) -> Option<usize> {
         slots
             .iter()
             .position(|slot| slot.owner == player && slot.possible == card.mask())
@@ -245,7 +245,7 @@ impl Engine {
     }
 
     /// Change the owner of the most constrained slot.
-    fn move_card(&mut self, from: usize, to: usize, card: Card) {
+    fn move_card(&mut self, from: usize, to: usize, card: RawCard) {
         let idx = self.find_card(&self.slots, from, card).unwrap();
         let slot = &mut self.slots[idx];
         slot.owner = to;
@@ -254,7 +254,7 @@ impl Engine {
     }
 
     /// Player does not own the card
-    fn not_own_card(&mut self, player: usize, card: Card) {
+    fn not_own_card(&mut self, player: usize, card: RawCard) {
         self.slots
             .iter_mut()
             .filter(|slot| slot.owner == player)
@@ -301,7 +301,7 @@ impl Engine {
         }
     }
 
-    pub fn assert_sanity(&self, players: &Vec<(usize, Vec<Card>)>) {
+    pub fn assert_sanity(&self, players: &Vec<(usize, Vec<RawCard>)>) {
         let mut slots = self.slots.clone();
         for (idx, cards) in players {
             for card in cards.iter() {
