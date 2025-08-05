@@ -196,7 +196,7 @@ impl Engine {
             }
             for player in ((self.player_idx % 2) ^ 1..self.num_players).step_by(2) {
                 let chance = Ratio::new(counts[player][num], denominator[num]);
-                if best_chance.map_or(true, |best| chance > best) {
+                if best_chance.map_or(true, |best| chance > best || chance == best && rand::random_bool(1.0 / 2.0)) {
                     self.request = EventRequest::Ask {
                         askee: player,
                         card: Card { num: num as u8 },
