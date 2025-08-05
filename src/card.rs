@@ -1,4 +1,19 @@
 use anyhow::Result;
+use strum_macros::EnumIter;
+
+// RawCard is the internal representation
+// Card is the user-facing representation used to parse cards
+// PrintCard is the user-facing representation used to display cards
+
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
+pub struct RawCard {
+    pub num: u8,
+}
+
+pub enum Card {
+    Standard { suit: Suit, rank: Rank },
+    Joker { big: bool },
+}
 
 #[derive(Eq, PartialEq)]
 pub enum Suit {
@@ -17,17 +32,17 @@ pub enum Rank {
     Ace,
 }
 
-pub enum DisplayCard {
-    Standard { suit: Suit, rank: Rank },
-    Joker { big: bool },
+pub struct PrintCard {
+    pub card: Card,
+    pub size: PrintCardSize,
 }
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
-pub struct Card {
-    pub num: u8,
+pub enum PrintCardSize {
+    Short,
+    Full,
 }
 
-#[derive(Clone, Hash, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Hash, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter)]
 pub enum Book {
     LowDiamonds,  // 2-7
     HighDiamonds, // 9-A
@@ -40,22 +55,7 @@ pub enum Book {
     Eights, // Some variants remove the eights
 }
 
-impl Card {
-    pub fn book(&self) -> Book {
-        match self.num / 6 {
-            0 => Book::LowDiamonds,
-            1 => Book::HighDiamonds,
-            2 => Book::LowClubs,
-            3 => Book::HighClubs,
-            4 => Book::LowHearts,
-            5 => Book::HighHearts,
-            6 => Book::LowSpades,
-            7 => Book::HighSpades,
-            8 => Book::Eights,
-            _ => panic!("Invalid card number"),
-        }
-    }
-
+impl RawCard {
     pub fn suit(&self) -> Option<Suit> {
         if self.num >= 52 {
             None
@@ -98,31 +98,46 @@ impl Card {
         }
     }
 
-    pub fn display_card(&self) -> DisplayCard {
+    pub fn as_card(&self) -> Card {
         if self.num == 52 {
-            return DisplayCard::Joker { big: false };
+            return Card::Joker { big: false };
         }
         if self.num == 53 {
-            return DisplayCard::Joker { big: true };
+            return Card::Joker { big: true };
         }
 
         let suit: Suit = self.suit().unwrap();
         let rank: Rank = self.rank().unwrap();
-        DisplayCard::Standard { suit, rank }
+        Card::Standard { suit, rank }
+    }
+
+    pub fn book(&self) -> Book {
+        match self.num / 6 {
+            0 => Book::LowDiamonds,
+            1 => Book::HighDiamonds,
+            2 => Book::LowClubs,
+            3 => Book::HighClubs,
+            4 => Book::LowHearts,
+            5 => Book::HighHearts,
+            6 => Book::LowSpades,
+            7 => Book::HighSpades,
+            8 => Book::Eights,
+            _ => panic!("Invalid card number"),
+        }
     }
 }
 
-impl DisplayCard {
-    fn card(&self) -> Card {
+impl Card {
+    pub fn to_raw_card(&self) -> RawCard {
         let num = match self {
-            DisplayCard::Joker { big } => {
+            Card::Joker { big } => {
                 if *big {
                     53
                 } else {
                     52
                 }
             }
-            DisplayCard::Standard { suit, rank } => {
+            Card::Standard { suit, rank } => {
                 let suit_offset = match suit {
                     Suit::Diamonds => 0,
                     Suit::Clubs => 1,
@@ -131,7 +146,7 @@ impl DisplayCard {
                 };
 
                 if *rank == Rank::Num(8) {
-                    return Card {
+                    return RawCard {
                         num: 8 * 6 + suit_offset,
                     };
                 }
@@ -149,16 +164,32 @@ impl DisplayCard {
                 suit_offset * 12 + rank_index
             }
         };
-        Card { num }
+        RawCard { num }
+    }
+
+    pub fn to_short_string(&self) -> String {
+        match self {
+            Card::Joker { big } => {
+                if *big {
+                    "B".to_string()
+                } else {
+                    "S".to_string()
+                }
+            }
+            Card::Standard { suit: _, rank } => match rank {
+                Rank::Num(10) => "T".to_string(),
+                _ => rank.to_string(),
+            },
+        }
     }
 }
 
 impl Book {
-    pub fn cards(&self) -> Vec<Card> {
+    pub fn cards(&self) -> Vec<RawCard> {
         let offset = *self as u8;
         let mut output = vec![];
         for i in 0..6 {
-            output.push(Card {
+            output.push(RawCard {
                 num: offset * 6 + i,
             });
         }
@@ -191,24 +222,37 @@ impl std::fmt::Display for Rank {
     }
 }
 
-impl std::fmt::Display for DisplayCard {
+// Card::to_string is used to print cards in the repl
+// It is used by default in Card and RawCard
+impl std::fmt::Display for Card {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DisplayCard::Joker { big } => {
+            Card::Joker { big } => {
                 if *big {
                     write!(f, "BJ")
                 } else {
                     write!(f, "SJ")
                 }
             }
-            DisplayCard::Standard { suit, rank } => write!(f, "{rank}{suit}"),
+            Card::Standard { suit, rank } => write!(f, "{rank}{suit}"),
         }
     }
 }
 
-impl std::fmt::Display for Card {
+// Card::to_short_string is used to print cards in the engine
+// And is used in PrintCard::to_string
+impl std::fmt::Display for PrintCard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.display_card())
+        match self.size {
+            PrintCardSize::Short => write!(f, "{}", self.card.to_short_string()),
+            PrintCardSize::Full => write!(f, "{}", self.card),
+        }
+    }
+}
+
+impl std::fmt::Display for RawCard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_card())
     }
 }
 
@@ -248,34 +292,34 @@ impl std::str::FromStr for Rank {
     }
 }
 
-impl std::str::FromStr for DisplayCard {
-    type Err = ParseCardError;
+impl std::str::FromStr for Card {
+    type Err = ParseRawCardError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Check for jokers
         match s.to_uppercase().as_str() {
-            "BJ" => return Ok(DisplayCard::Joker { big: true }),
-            "SJ" => return Ok(DisplayCard::Joker { big: false }),
+            "BJ" => return Ok(Card::Joker { big: true }),
+            "SJ" => return Ok(Card::Joker { big: false }),
             _ => {}
         }
 
         // Try to split the string into rank and suit
         if s.len() < 2 {
-            return Err(ParseCardError);
+            return Err(ParseRawCardError);
         }
         let (rank_str, suit_str) = s.split_at(s.len() - 1);
-        let rank = Rank::from_str(rank_str).map_err(|_| ParseCardError)?;
-        let suit = Suit::from_str(suit_str).map_err(|_| ParseCardError)?;
-        Ok(DisplayCard::Standard { suit, rank })
+        let rank = Rank::from_str(rank_str).map_err(|_| ParseRawCardError)?;
+        let suit = Suit::from_str(suit_str).map_err(|_| ParseRawCardError)?;
+        Ok(Card::Standard { suit, rank })
     }
 }
 
-impl std::str::FromStr for Card {
-    type Err = ParseCardError;
+impl std::str::FromStr for RawCard {
+    type Err = ParseRawCardError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let display_card = DisplayCard::from_str(s)?;
-        Ok(display_card.card())
+        let card = Card::from_str(s)?;
+        Ok(card.to_raw_card())
     }
 }
 
@@ -298,7 +342,7 @@ impl std::str::FromStr for Book {
 }
 
 // Debug
-impl std::fmt::Debug for Card {
+impl std::fmt::Debug for RawCard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self}")
     }
@@ -312,7 +356,7 @@ pub struct ParseSuitError;
 pub struct ParseRankError;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct ParseCardError;
+pub struct ParseRawCardError;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ParseBookError;
@@ -321,7 +365,7 @@ impl std::error::Error for ParseSuitError {}
 
 impl std::error::Error for ParseRankError {}
 
-impl std::error::Error for ParseCardError {}
+impl std::error::Error for ParseRawCardError {}
 
 impl std::error::Error for ParseBookError {}
 
@@ -337,7 +381,7 @@ impl std::fmt::Display for ParseRankError {
     }
 }
 
-impl std::fmt::Display for ParseCardError {
+impl std::fmt::Display for ParseRawCardError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Failed to parse card")
     }

@@ -1,5 +1,4 @@
-use crate::card::{Card, DisplayCard, Suit};
-use crate::engine::{Constraint, Engine, Slot};
+use crate::card::{Card, PrintCard, PrintCardSize, RawCard, Suit};
 use crate::{Fish, Player};
 use colored::Colorize;
 use std::cell::RefCell;
@@ -7,6 +6,7 @@ use std::fmt::Debug;
 use std::fmt::Write as FmtWrite;
 use std::rc::Rc;
 
+// Helper functions to convert RawCard to Suit, Rank, and Card
 pub trait PrettyDisplay {
     fn to_pretty_string(&self) -> String;
 }
@@ -25,7 +25,7 @@ impl Printer {
         }
     }
 
-    // Printers
+    // Print utilities
     pub fn print_hand(&self, player: usize, g: &Fish) -> String {
         let mut players = g.players.borrow_mut();
         players[player].cards.sort();
@@ -37,49 +37,93 @@ impl Printer {
         self.to_pretty_string(&players[player])
     }
 
-    pub fn print_constraints(&self, e: &Engine, g: &Fish) -> String {
+    pub fn print_constraints(&self, player: usize, g: &Fish) -> String {
+        let players = g.players.borrow();
+        let e = players[player].ref_engine();
         let mut output = String::new();
-        let map = e.prune();
-        for (player, hand) in map.iter() {
-            writeln!(output, "{}", self.print_player(*player, g)).unwrap();
-            for (i, slot) in hand.iter().enumerate() {
-                writeln!(&mut output, "Slot {i}: {}", self.to_pretty_string(slot)).unwrap();
-            }
+
+        writeln!(
+            &mut output,
+            "           {} {} {} {} {} {} {} {} {}",
+            " LOW ♦".to_string().blue(),
+            "HIGH ♦".to_string().blue(),
+            " LOW ♣".to_string().green(),
+            "HIGH ♣".to_string().green(),
+            " LOW ♥".to_string().red(),
+            "HIGH ♥".to_string().red(),
+            " LOW ♠".to_string().bright_black(),
+            "HIGH ♠".to_string().bright_black(),
+            "EIGHT ".to_string().bright_black(),
+        )
+        .unwrap();
+
+        for (player, bits) in e.to_matrix().iter() {
+            let bits_str: String = bits
+                .iter()
+                .enumerate()
+                .map(|(i, b)| {
+                    if *b {
+                        PrintCard {
+                            card: RawCard { num: i as u8 }.as_card(),
+                            size: PrintCardSize::Short,
+                        }
+                        .to_pretty_string()
+                    } else {
+                        ".".to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .chunks(6)
+                .map(|chunk| chunk.join(""))
+                .collect::<Vec<String>>()
+                .join("|");
+
+            writeln!(
+                &mut output,
+                "[{}] {}",
+                self.print_player(*player, g),
+                bits_str
+            )
+            .unwrap();
         }
-        output.to_string()
+        output
     }
 }
 
-impl PrettyDisplay for Card {
+impl PrettyDisplay for PrintCard {
     fn to_pretty_string(&self) -> String {
-        match self.display_card() {
-            DisplayCard::Joker { big } => {
+        let str_func = {
+            match self.size {
+                PrintCardSize::Short => Card::to_short_string,
+                PrintCardSize::Full => Card::to_string,
+            }
+        };
+        match self.card {
+            Card::Standard { ref suit, .. } => match suit {
+                Suit::Diamonds => str_func(&self.card).blue(),
+                Suit::Clubs => str_func(&self.card).green(),
+                Suit::Hearts => str_func(&self.card).red(),
+                Suit::Spades => str_func(&self.card).bright_black(),
+            },
+            Card::Joker { big } => {
                 if big {
-                    self.to_string().blue()
+                    str_func(&self.card).blue()
                 } else {
-                    self.to_string().red()
+                    str_func(&self.card).red()
                 }
             }
-            DisplayCard::Standard { suit, .. } => match suit {
-                Suit::Diamonds => self.to_string().blue(),
-                Suit::Clubs => self.to_string().green(),
-                Suit::Hearts => self.to_string().red(),
-                Suit::Spades => self.to_string().bright_black(),
-            },
         }
         .to_string()
     }
 }
 
-impl<T: PrettyDisplay> PrettyDisplay for Vec<T> {
+impl PrettyDisplay for RawCard {
     fn to_pretty_string(&self) -> String {
-        format!(
-            "[{}]",
-            self.iter()
-                .map(|item| item.to_pretty_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
+        PrintCard {
+            card: self.as_card(),
+            size: PrintCardSize::Full,
+        }
+        .to_pretty_string()
     }
 }
 
@@ -93,12 +137,14 @@ impl PrettyDisplay for Player {
     }
 }
 
-impl PrettyDisplay for Slot {
+impl<T: PrettyDisplay> PrettyDisplay for Vec<T> {
     fn to_pretty_string(&self) -> String {
-        match self {
-            Some(Constraint::IsCard(card)) => card.to_pretty_string(),
-            Some(Constraint::InBook(book)) => book.to_pretty_string(),
-            None => "None".to_string(),
-        }
+        format!(
+            "[{}]",
+            self.iter()
+                .map(|item| item.to_pretty_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
