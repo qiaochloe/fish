@@ -40,11 +40,40 @@ struct Team {
 }
 
 #[derive(Debug)]
+enum PlayerType {
+    Bot { engine: Engine },
+    Human,
+}
+
+#[derive(Debug)]
 struct Player {
     idx: usize,
     cards: Vec<Card>,
-    is_bot: bool,
-    engine: Option<Engine>,
+    player_type: PlayerType
+}
+
+impl Player {
+    fn is_bot(&self) -> bool {
+        matches!(self.player_type, PlayerType::Bot { .. })
+    }
+
+    fn is_human(&self) -> bool {
+        matches!(self.player_type, PlayerType::Human)
+    }
+
+    fn ref_engine(&self) -> &Engine {
+        match &self.player_type {
+            PlayerType::Bot { engine } => engine,
+            PlayerType::Human => panic!("No engine for human player!"),
+        }
+    }
+
+    fn mut_engine(&mut self) -> &mut Engine {
+        match &mut self.player_type {
+            PlayerType::Bot { engine } => engine,
+            PlayerType::Human => panic!("No engine for human player!"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -147,15 +176,15 @@ impl Fish {
         let mut players = vec![];
         for idx in 0..num_players {
             let cards = deck.drain(0..num_cards / num_players).collect::<Vec<Card>>();
-            let is_bot = bot_idxs.contains(&idx);
 
-            let mut engine = None;
-            if is_bot {
-                engine = Some(Engine::init(num_players, num_cards, idx, &cards));
-                engine.as_mut().unwrap().update_request();
+            let mut player_type = PlayerType::Human;
+            if bot_idxs.contains(&idx) {
+                let mut engine = Engine::init(num_players, num_cards, idx, &cards);
+                engine.update_request();
+                player_type = PlayerType::Bot { engine };
             };
 
-            players.push(Player { idx, cards, is_bot, engine });
+            players.push(Player { idx, cards, player_type });
         }
 
         Fish {
@@ -184,7 +213,7 @@ impl Fish {
         if *self.game_over.borrow() { return Err(AskError::GameOver); }
 
         let asker_idx = *self.curr_player.borrow();
-        if self.players.borrow()[asker_idx].is_bot {
+        if self.players.borrow()[asker_idx].is_bot() {
             return Err(AskError::BotTurn);
         }
         self.ask(askee_idx, card)
@@ -250,12 +279,12 @@ impl Fish {
         let num_players = *self.num_players.borrow();
         let mut players = self.players.borrow_mut();
 
-        if !players[asker_idx].is_bot {
+        if !players[asker_idx].is_bot() {
             return Err(NextError::HumanTurn);
         }
 
-        for declarer_idx in (0..num_players).filter(|&p| players[p].is_bot) {
-            if let EventRequest::Declare { book, guessed_cards } = players[declarer_idx].engine.as_ref().unwrap().request.clone() {
+        for declarer_idx in (0..num_players).filter(|&p| players[p].is_bot()) {
+            if let EventRequest::Declare { book, guessed_cards } = players[declarer_idx].ref_engine().request.clone() {
                 let mut good_declaration: bool = true;
                 let mut actual_cards = HashMap::new();
 
@@ -304,7 +333,7 @@ impl Fish {
             }
         }
 
-        match &players[asker_idx].engine.as_ref().unwrap().request.clone() {
+        match &players[asker_idx].ref_engine().request.clone() {
             EventRequest::Ask { askee, card } => {
                 drop(players);
                 match self.ask(*askee, &card) {
@@ -397,10 +426,6 @@ impl Fish {
         self.num_players() - self.num_humans()
     }
 
-    fn is_bot(&self, idx: usize) -> bool {
-        self.players.borrow()[idx].is_bot
-    }
-
     fn num_players(&self) -> usize {
         *self.num_players.borrow()
     }
@@ -459,7 +484,7 @@ fn main() {
                     for i in 0..g.num_players() {
                         println!("{} [{}]: {}", 
                             p.print_player(i, g),
-                            if g.is_bot(i) { "Bot" } else { "Player" },
+                            if g.players.borrow()[i].is_bot() { "Bot" } else { "Player" },
                             p.print_hand(i, g));
                     }
 
@@ -487,9 +512,9 @@ fn main() {
                             // Engines
                             let players = g.players.borrow().iter().map(|p| (p.idx, p.cards.clone())).collect();
                             g.players.borrow_mut().iter_mut().for_each(|p| {
-                                if p.is_bot {
-                                    p.engine.as_mut().unwrap().update(Event::Ask(ask.clone()));
-                                    p.engine.as_ref().unwrap().assert_sanity(&players);
+                                if p.is_bot() {
+                                    p.mut_engine().update(Event::Ask(ask.clone()));
+                                    p.ref_engine().assert_sanity(&players);
                                 }
                             });
                         },
@@ -541,9 +566,9 @@ fn main() {
                                 // Engines
                                 let players = g.players.borrow().iter().map(|p| (p.idx, p.cards.clone())).collect();
                                 g.players.borrow_mut().iter_mut().for_each(|p| {
-                                if p.is_bot {
-                                    p.engine.as_mut().unwrap().update(ask.clone());
-                                    p.engine.as_ref().unwrap().assert_sanity(&players);
+                                if p.is_bot() {
+                                    p.mut_engine().update(ask.clone());
+                                    p.ref_engine().assert_sanity(&players);
                                 }
                             });
                             },
@@ -557,9 +582,9 @@ fn main() {
                                 // Engines
                                 let players = g.players.borrow().iter().map(|p| (p.idx, p.cards.clone())).collect();
                                 g.players.borrow_mut().iter_mut().for_each(|p| {
-                                    if p.is_bot {
-                                        p.engine.as_mut().unwrap().update(declare.clone());
-                                        p.engine.as_ref().unwrap().assert_sanity(&players);
+                                    if p.is_bot() {
+                                        p.mut_engine().update(declare.clone());
+                                        p.ref_engine().assert_sanity(&players);
                                     }
                                 });
                             }
@@ -607,9 +632,9 @@ fn main() {
                     // Engines
                     let players = g.players.borrow().iter().map(|p| (p.idx, p.cards.clone())).collect();
                     g.players.borrow_mut().iter_mut().for_each(|p| {
-                        if p.is_bot {
-                            p.engine.as_mut().unwrap().update(Event::Declare(declare.as_ref().ok().unwrap().clone()));
-                            p.engine.as_ref().unwrap().assert_sanity(&players);
+                        if p.is_bot() {
+                            p.mut_engine().update(Event::Declare(declare.as_ref().ok().unwrap().clone()));
+                            p.ref_engine().assert_sanity(&players);
                         }
                     });
                     Ok(CommandStatus::Done)

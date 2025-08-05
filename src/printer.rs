@@ -38,7 +38,7 @@ impl Printer {
 
     pub fn print_constraints(&self, player: usize, g: &Fish) -> String {
         let players = g.players.borrow();
-        let e = players.get(player).unwrap().engine.as_ref().unwrap();
+        let e = players[player].ref_engine();
         let mut output = String::new();
         for (player, bits) in e.to_matrix().iter() {
             let bits_str: String = bits
